@@ -1,8 +1,21 @@
-# Invoice Agent (working name)
+# Pilot (working name)
 
-Logs into vendor portals for a bookkeeping firm's clients and downloads their invoices and statements, using Claude to drive a real browser.
+A web app where you paste a website link and your login, watch an AI agent work in a live browser window, and tell it what to do. The first paid use case is logging into vendor portals for a bookkeeping firm's clients and downloads their invoices and statements, using Claude to drive a real browser.
 
-## What it does
+## Web app
+```bash
+pip install -r requirements.txt
+python -m invoice_agent.server --demo          # try it: scripted run against a built-in test portal, no API key
+ANTHROPIC_API_KEY=... python -m invoice_agent.server   # real agent on http://127.0.0.1:8000
+```
+- Start form: website link, username, password, optional authenticator secret, task.
+- Live view: the agent's browser updates as it works; the activity feed shows each step in plain English.
+- Chat: send instructions at any time, including after a task finishes.
+- Approvals: payments, orders, deletions and submissions pause with Allow / Don't allow buttons.
+- Login details live in server memory for that session only, are never sent to the AI, and are wiped when it ends.
+- Hosting: `Dockerfile` included. The server refuses to listen publicly unless `INVOICE_AGENT_ACCESS_CODE` is set, since every session spends your AI credit.
+
+## Batch mode (command line): what it does
 - Reads `portals.toml`: one entry per client account per vendor portal, with the task in plain English.
 - Logs in with credentials from an encrypted local vault. **The model never sees a username, password or one-time code**; it picks the field and the code types the value in.
 - Generates authenticator (TOTP) codes itself when the firm stores the secret; otherwise asks the bookkeeper.

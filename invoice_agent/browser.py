@@ -162,6 +162,22 @@ class Browser:
         except PWError:
             return ""
 
+    def describe_ref(self, ref: str) -> str:
+        try:
+            loc = self._el(ref)
+        except ActionError:
+            return ""
+        d = self._describe(loc)
+        if not d:
+            try:
+                d = loc.evaluate("el => el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || (el.labels && el.labels[0] && el.labels[0].innerText) || el.tagName.toLowerCase()")
+            except PWError:
+                d = ""
+        return (d or "")[:80]
+
+    def frame(self, quality: int = 60) -> bytes:
+        return self.page.screenshot(type="jpeg", quality=quality)
+
     def _guard_risky(self, loc, verb: str) -> None:
         desc = self._describe(loc)
         if RISKY.search(desc):

@@ -201,6 +201,8 @@ def _execute(call, br: Browser, vault: Vault, portal: Portal, ask_human, log: Ru
     """Run one tool call. Returns (content for the model, is_error, finished)."""
     name, args = call.name, call.input if isinstance(call.input, dict) else {}
     shot = run_dir / "shots" / f"{step:03d}-{call.id[-6:]}.png"
+    if args.get("ref"):
+        args = {**args, "target": br.describe_ref(args["ref"])}
     try:
         if name == "finish":
             result.status = args.get("status", "failed")

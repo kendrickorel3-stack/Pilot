@@ -17,7 +17,7 @@ from anthropic.types.beta import BetaMessage
 from invoice_agent.agent import run_portal
 from invoice_agent.config import Portal
 from invoice_agent.vault import Vault, VaultError, totp
-from mock_portal import PASSWORD, TOTP_SECRET, USER, MockPortal
+from invoice_agent.demo_portal import PASSWORD, TOTP_SECRET, USER, MockPortal
 
 CHROMIUM = os.environ.get("INVOICE_AGENT_CHROMIUM", "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome")
 CHROMIUM = CHROMIUM if Path(CHROMIUM).exists() else None
