@@ -1,6 +1,6 @@
 # Pilot (working name)
 
-A web app where you paste a website link and your login, watch an AI agent work in a live browser window, and tell it what to do. The first paid use case is logging into vendor portals for a bookkeeping firm's clients and downloads their invoices and statements, using Claude to drive a real browser.
+A web app where you paste a website link and your login, watch an AI agent work in a live browser window, and tell it what to do. The first paid use case is logging into vendor portals for a bookkeeping firm's clients to download their invoices and statements. The AI can be OpenAI or Claude.
 
 ## Quick start (run it on your own computer)
 1. Install **Python 3.11 or newer** from https://www.python.org/downloads/ (on Windows, tick "Add Python to PATH").
