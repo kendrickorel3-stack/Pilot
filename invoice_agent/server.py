@@ -1,7 +1,7 @@
 """Web app: paste a link and login details, watch the agent work live, and chat with it.
 
-    python -m invoice_agent.server                 # real agent (needs ANTHROPIC_API_KEY)
-    python -m invoice_agent.server --demo          # scripted demo against a built-in fake portal
+    python -m invoice_agent.server --open          # local use; paste your API key on the setup screen
+    python -m invoice_agent.server --demo          # only the scripted demo (no AI)
 
 When reachable from other machines, set INVOICE_AGENT_ACCESS_CODE; every request must carry it,
 because each session spends your AI credit and runs a browser on your server.
@@ -35,6 +35,11 @@ class StartBody(BaseModel):
     totp_secret: str = Field(default="", max_length=200)
     task: str = Field(default="", max_length=4000)
     extra_domains: str = Field(default="", max_length=1000)
+    demo: bool = False
+
+
+class KeyBody(BaseModel):
+    anthropic_api_key: str = Field(min_length=10, max_length=300)
 
 
 class TextBody(BaseModel):
@@ -45,8 +50,33 @@ class DecideBody(BaseModel):
     allow: bool
 
 
+def load_env_file(path: Path) -> None:
+    """Minimal KEY=VALUE loader for the local settings file (values never logged)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def save_key(path: Path, key: str) -> None:
+    lines = [l for l in (path.read_text().splitlines() if path.exists() else []) if not l.startswith("ANTHROPIC_API_KEY=")]
+    lines.append(f"ANTHROPIC_API_KEY={key}")
+    path.write_text("\n".join(lines) + "\n")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def has_key() -> bool:
+    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+
+
 def create_app(*, demo: bool = False, access_code: str = "", executable_path: str | None = None,
-               data_dir: Path = Path(".")) -> FastAPI:
+               data_dir: Path = Path("."), env_file: Path | None = None) -> FastAPI:
     sessions: dict[str, AgentSession] = {}
 
     @asynccontextmanager
@@ -58,15 +88,11 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
             portal.__exit__()
 
     app = FastAPI(title="Browser agent", docs_url=None, redoc_url=None, lifespan=lifespan)
-    portal = None
-    if demo:
-        from .demo_portal import PASSWORD, TOTP_SECRET, USER, MockPortal
-        portal = MockPortal().__enter__()
-        app.state.demo_defaults = {"url": portal.url + "/login", "username": USER, "password": PASSWORD,
-                                   "totp_secret": TOTP_SECRET, "task": "Download every invoice from October 2026.",
-                                   "extra_domains": ""}
-    else:
-        app.state.demo_defaults = None
+    # The built-in test portal is always available, so anyone can try the demo without a key.
+    from .demo_portal import PASSWORD, TOTP_SECRET, USER, MockPortal
+    portal = MockPortal().__enter__()
+    demo_defaults = {"url": portal.url + "/login", "username": USER, "password": PASSWORD,
+                     "totp_secret": TOTP_SECRET, "task": "Download every invoice from October 2026.", "extra_domains": ""}
 
     def check(request: Request) -> None:
         if not access_code:
@@ -95,7 +121,22 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
 
     @app.get("/api/config")
     def config(request: Request):
-        return {"demo": app.state.demo_defaults, "needs_code": bool(access_code)}
+        local = (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost", "testclient")
+        return {"demo": demo_defaults, "demo_only": demo, "needs_code": bool(access_code), "has_key": has_key(),
+                "can_save_key": bool(env_file) and local and not demo}
+
+    @app.post("/api/settings")
+    def settings(body: KeyBody, request: Request):
+        check(request)
+        host = request.client.host if request.client else ""
+        if not env_file or host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+            raise HTTPException(403, "The API key can only be set from the computer running Pilot.")
+        key = body.anthropic_api_key.strip()
+        if not key.startswith("sk-ant-"):
+            raise HTTPException(400, "That doesn't look like an Anthropic API key. They start with sk-ant-.")
+        save_key(env_file, key)
+        os.environ["ANTHROPIC_API_KEY"] = key
+        return {"ok": True}
 
     @app.post("/api/check")
     def check_code(request: Request):
@@ -109,11 +150,12 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
         if sum(s.is_alive() for s in sessions.values()) >= MAX_SESSIONS:
             raise HTTPException(429, f"{MAX_SESSIONS} sessions are already running. Stop one first.")
         client = None
-        if demo:
+        if demo or body.demo:
             from .demo import DemoClient
             client = DemoClient()
-        elif not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-            raise HTTPException(503, "No Anthropic API key is set on the server. Set ANTHROPIC_API_KEY, or start with --demo.")
+            body = body.model_copy(update=demo_defaults)  # the demo only ever runs against the built-in portal
+        elif not has_key():
+            raise HTTPException(503, "Add your Anthropic API key first, or try the demo.")
         try:
             s = AgentSession(url=body.url, username=body.username, password=body.password, totp_secret=body.totp_secret,
                              task=body.task, extra_domains=[d for d in body.extra_domains.replace(",", " ").split() if d],
@@ -199,14 +241,24 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     ap.add_argument("--demo", action="store_true", help="Scripted demo against a built-in fake portal; no API key needed")
     ap.add_argument("--chromium", default=os.environ.get("INVOICE_AGENT_CHROMIUM"))
-    ap.add_argument("--data", default=os.environ.get("INVOICE_AGENT_DATA", "."), help="Where runs/ and out/ are written")
+    ap.add_argument("--data", default=os.environ.get("INVOICE_AGENT_DATA", "."), help="Where runs/, out/ and settings are written")
+    ap.add_argument("--open", action="store_true", help="Open the app in your web browser")
     a = ap.parse_args()
+    Path(a.data).mkdir(parents=True, exist_ok=True)
+    env_file = Path(a.data) / ".env"
+    load_env_file(env_file)
     code = os.environ.get("INVOICE_AGENT_ACCESS_CODE", "")
     if a.host not in ("127.0.0.1", "localhost") and not code:
         raise SystemExit("Refusing to listen on a public address without INVOICE_AGENT_ACCESS_CODE set.")
+    import threading
     import uvicorn
-    uvicorn.run(create_app(demo=a.demo, access_code=code, executable_path=a.chromium, data_dir=Path(a.data)),
-                host=a.host, port=a.port, log_level="warning")
+    import webbrowser
+    url = f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '127.0.0.1') else a.host}:{a.port}"
+    print(f"Pilot is running at {url}  (press Ctrl+C to stop)")
+    if a.open:
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    uvicorn.run(create_app(demo=a.demo, access_code=code, executable_path=a.chromium, data_dir=Path(a.data),
+                           env_file=env_file), host=a.host, port=a.port, log_level="warning")
 
 
 if __name__ == "__main__":

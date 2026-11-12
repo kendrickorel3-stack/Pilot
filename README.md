@@ -2,18 +2,27 @@
 
 A web app where you paste a website link and your login, watch an AI agent work in a live browser window, and tell it what to do. The first paid use case is logging into vendor portals for a bookkeeping firm's clients and downloads their invoices and statements, using Claude to drive a real browser.
 
-## Web app
-```bash
-pip install -r requirements.txt
-python -m invoice_agent.server --demo          # try it: scripted run against a built-in test portal, no API key
-ANTHROPIC_API_KEY=... python -m invoice_agent.server   # real agent on http://127.0.0.1:8000
-```
-- Start form: website link, username, password, optional authenticator secret, task.
-- Live view: the agent's browser updates as it works; the activity feed shows each step in plain English.
-- Chat: send instructions at any time, including after a task finishes.
-- Approvals: payments, orders, deletions and submissions pause with Allow / Don't allow buttons.
-- Login details live in server memory for that session only, are never sent to the AI, and are wiped when it ends.
-- Hosting: `Dockerfile` included. The server refuses to listen publicly unless `INVOICE_AGENT_ACCESS_CODE` is set, since every session spends your AI credit.
+## Quick start (run it on your own computer)
+1. Install **Python 3.11 or newer** from https://www.python.org/downloads/ (on Windows, tick "Add Python to PATH").
+2. Unzip this folder.
+3. Start it:
+   - **Windows:** double-click `run.bat`
+   - **Mac / Linux:** open a terminal in the folder and run `./run.sh`
+4. Your browser opens at http://127.0.0.1:8000. The first start takes a few minutes while it installs.
+5. Click **Watch a demo** to see it work with no key, or paste your **Anthropic API key** (console.anthropic.com) to run real tasks.
+
+Stop it with Ctrl+C in the terminal window. Your key is saved in `data/.env`; downloads go to `data/out/`; step-by-step reports with screenshots go to `data/runs/`.
+
+## Using it
+- **Start form:** website link, username, password, optional authenticator secret, and what it should do.
+- **Live view:** the agent's browser updates as it works; the activity feed shows each step in plain English.
+- **Chat:** send instructions at any time, including after a task finishes.
+- **Approvals:** payments, orders, deletions and submissions pause with Allow / Don't allow buttons.
+- **Login details** live in memory for that session only, are never sent to the AI, and are wiped when it ends.
+- **Cost:** shown live in the top bar; each session stops at $2.00 of AI usage.
+
+## Hosting it online
+A `Dockerfile` is included. The server refuses to listen on a public address unless `INVOICE_AGENT_ACCESS_CODE` is set, because every session spends your AI credit.
 
 ## Batch mode (command line): what it does
 - Reads `portals.toml`: one entry per client account per vendor portal, with the task in plain English.

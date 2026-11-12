@@ -62,6 +62,9 @@ button { cursor: pointer; }
 details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
 .note { font-size: 13px; color: var(--muted); background: var(--surface-2); border-radius: 8px; padding: 10px 12px; margin: 4px 0 16px; }
 .banner { font-size: 13px; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.stack { display: grid; gap: 16px; width: min(560px, 100%); }
+.row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.ok-note { color: var(--good); font-size: 14px; margin: 0 0 12px; }
 .err { color: var(--bad); font-size: 14px; margin: 8px 0 0; min-height: 1.2em; }
 
 /* live */
@@ -120,6 +123,15 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
 </main>
 
 <main class="start" id="startView" hidden>
+  <div class="stack">
+  <form class="card" id="keyCard" hidden autocomplete="off">
+    <h1>Connect the AI</h1>
+    <p class="lead">Pilot uses Claude to decide each step. Paste an Anthropic API key to run real tasks. You can create one at console.anthropic.com; usage is billed to that account.</p>
+    <div class="field"><label for="apikey">Anthropic API key</label><input id="apikey" type="password" placeholder="sk-ant-..." autocomplete="off" required>
+      <small>Saved only on this computer, in Pilot's .env file.</small></div>
+    <div class="row-btns"><button class="btn primary" type="submit">Save key</button><button class="btn" type="button" id="demoBtn2">Try the demo first</button></div>
+    <p class="err" id="keyErr"></p>
+  </form>
   <form class="card" id="startForm" autocomplete="off">
     <h1>Send an agent to a website</h1>
     <p class="lead">Paste the link and your login. You'll watch it work live and can tell it what to do at any time.</p>
@@ -139,9 +151,10 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
         <small>For sign-in pages hosted elsewhere. It can't leave the website's own domain otherwise.</small></div>
     </details>
     <p class="note">Your login is kept in the server's memory for this session only, is typed into the site by the server, and is never shown to the AI. Payments, orders, deletions and submissions wait for you to approve. Only use accounts you own, on sites that allow automated access.</p>
-    <button class="btn primary" type="submit" id="go">Start</button>
+    <div class="row-btns"><button class="btn primary" type="submit" id="go">Start</button><button class="btn" type="button" id="demoBtn">Watch a demo</button></div>
     <p class="err" id="startErr"></p>
   </form>
+  </div>
 </main>
 
 <main class="live" id="liveView" hidden>
@@ -168,7 +181,7 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  let code = '', sid = null, es = null, needsCode = false;
+  let code = '', sid = null, es = null, needsCode = false, demoOnly = false;
   try { code = sessionStorage.getItem('pilot-code') || ''; } catch (e) {}
 
   async function api(path, body) {
@@ -182,11 +195,13 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
   async function boot() {
     const cfg = await api('/api/config');
     needsCode = cfg.needs_code;
-    if (cfg.demo) {
+    demoOnly = cfg.demo_only;
+    if (demoOnly) {
       $('demoBanner').hidden = false;
       $('url').value = cfg.demo.url; $('user').value = cfg.demo.username; $('pass').value = cfg.demo.password;
       $('totp').value = cfg.demo.totp_secret; $('task').value = cfg.demo.task;
     }
+    $('keyCard').hidden = cfg.has_key || demoOnly || !cfg.can_save_key;
     if (needsCode && !code) return show('codeView');
     if (needsCode) { try { await api('/api/check', {}); } catch { code = ''; return show('codeView'); } }
     show('startView');
@@ -198,11 +213,24 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
     catch (err) { $('codeErr').textContent = 'That code was not accepted.'; }
   });
 
+  $('keyCard').addEventListener('submit', async e => {
+    e.preventDefault(); $('keyErr').textContent = '';
+    try { await api('/api/settings', { anthropic_api_key: $('apikey').value.trim() }); $('apikey').value = ''; $('keyCard').hidden = true; }
+    catch (err) { $('keyErr').textContent = err.message; }
+  });
+  async function startDemo() {
+    $('startErr').textContent = '';
+    try { const r = await api('/api/sessions', { url: 'demo', demo: true }); sid = r.id; startLive(); }
+    catch (err) { $('startErr').textContent = err.message; }
+  }
+  $('demoBtn').addEventListener('click', startDemo);
+  $('demoBtn2').addEventListener('click', startDemo);
+
   $('startForm').addEventListener('submit', async e => {
     e.preventDefault(); $('startErr').textContent = ''; $('go').disabled = true;
     try {
       const r = await api('/api/sessions', { url: $('url').value.trim(), username: $('user').value, password: $('pass').value,
-        totp_secret: $('totp').value.trim(), task: $('task').value.trim(), extra_domains: $('extra').value.trim() });
+        totp_secret: $('totp').value.trim(), task: $('task').value.trim(), extra_domains: $('extra').value.trim(), demo: demoOnly });
       $('pass').value = ''; $('totp').value = '';
       sid = r.id; startLive();
     } catch (err) { $('startErr').textContent = err.message; }
