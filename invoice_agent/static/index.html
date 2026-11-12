@@ -62,6 +62,12 @@ button { cursor: pointer; }
 details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
 .note { font-size: 13px; color: var(--muted); background: var(--surface-2); border-radius: 8px; padding: 10px 12px; margin: 4px 0 16px; }
 .banner { font-size: 13px; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.seg { border: 0; padding: 0; margin: 0 0 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+.seg label { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+.seg label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.field select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit; }
+.ailine { margin: -8px 0 16px; font-size: 13px; color: var(--muted); }
+.ailine button { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: 13px; }
 .stack { display: grid; gap: 16px; width: min(560px, 100%); }
 .row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .ok-note { color: var(--good); font-size: 14px; margin: 0 0 12px; }
@@ -126,15 +132,23 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
   <div class="stack">
   <form class="card" id="keyCard" hidden autocomplete="off">
     <h1>Connect the AI</h1>
-    <p class="lead">Pilot uses Claude to decide each step. Paste an Anthropic API key to run real tasks. You can create one at console.anthropic.com; usage is billed to that account.</p>
-    <div class="field"><label for="apikey">Anthropic API key</label><input id="apikey" type="password" placeholder="sk-ant-..." autocomplete="off" required>
-      <small>Saved only on this computer, in Pilot's .env file.</small></div>
-    <div class="row-btns"><button class="btn primary" type="submit">Save key</button><button class="btn" type="button" id="demoBtn2">Try the demo first</button></div>
+    <p class="lead">Pilot needs an AI to decide each step. Paste an API key; usage is billed to that account.</p>
+    <fieldset class="seg" aria-label="AI provider">
+      <label><input type="radio" name="prov" value="openai" checked> OpenAI</label>
+      <label><input type="radio" name="prov" value="anthropic"> Anthropic (Claude)</label>
+    </fieldset>
+    <div class="field"><label for="apikey" id="keyLabel">OpenAI API key</label><input id="apikey" type="password" placeholder="sk-..." autocomplete="off" required>
+      <small id="keyHelp">Create one at platform.openai.com/api-keys. Saved only on this computer, in Pilot's data/.env file.</small></div>
+    <div class="field" id="modelField"><label for="model">Model</label>
+      <select id="model"></select>
+      <small>Prices per million tokens from OpenAI's pricing page (Nov 2026). A typical task uses well under $0.50.</small></div>
+    <div class="row-btns"><button class="btn primary" type="submit" id="saveKey">Check and save</button><button class="btn" type="button" id="demoBtn2">Try the demo first</button><button class="btn" type="button" id="cancelKey" hidden>Cancel</button></div>
     <p class="err" id="keyErr"></p>
   </form>
   <form class="card" id="startForm" autocomplete="off">
     <h1>Send an agent to a website</h1>
     <p class="lead">Paste the link and your login. You'll watch it work live and can tell it what to do at any time.</p>
+    <p class="ailine" id="aiLine" hidden></p>
     <div class="banner" id="demoBanner" hidden>Demo mode: the form is filled in for a built-in test portal, and a scripted run plays instead of the AI.</div>
     <div class="field"><label for="url">Website link</label><input id="url" type="url" placeholder="https://portal.example.com/login" required></div>
     <div class="two">
@@ -181,7 +195,14 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  let code = '', sid = null, es = null, needsCode = false, demoOnly = false;
+  let code = '', sid = null, es = null, needsCode = false, demoOnly = false, canSave = false;
+  function setAiLine(provider, model) {
+    const line = $('aiLine');
+    if (!provider || demoOnly) { line.hidden = true; return; }
+    line.hidden = false;
+    line.innerHTML = `AI: ${provider === 'openai' ? 'OpenAI' : 'Anthropic'} · ${model}` + (canSave ? ' · <button type="button" id="changeAi">Change</button>' : '');
+    const c = $('changeAi'); if (c) c.onclick = () => { $('keyCard').hidden = false; $('cancelKey').hidden = false; $('apikey').focus(); };
+  }
   try { code = sessionStorage.getItem('pilot-code') || ''; } catch (e) {}
 
   async function api(path, body) {
@@ -201,7 +222,11 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
       $('url').value = cfg.demo.url; $('user').value = cfg.demo.username; $('pass').value = cfg.demo.password;
       $('totp').value = cfg.demo.totp_secret; $('task').value = cfg.demo.task;
     }
-    $('keyCard').hidden = cfg.has_key || demoOnly || !cfg.can_save_key;
+    canSave = cfg.can_save_key;
+    const labels = { 'gpt-6.1-sol': 'gpt-6.1-sol: balanced, $2 in / $10 out (recommended)', 'gpt-6.1-terra': 'gpt-6.1-terra: cheaper, $1 / $5', 'gpt-6-astra': 'gpt-6-astra: strongest, $10 / $50' };
+    $('model').innerHTML = cfg.openai_models.map(m => `<option value="${m}">${labels[m] || m}</option>`).join('');
+    setAiLine(cfg.provider, cfg.model);
+    $('keyCard').hidden = cfg.has_key || demoOnly || !canSave;
     if (needsCode && !code) return show('codeView');
     if (needsCode) { try { await api('/api/check', {}); } catch { code = ''; return show('codeView'); } }
     show('startView');
@@ -213,10 +238,23 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
     catch (err) { $('codeErr').textContent = 'That code was not accepted.'; }
   });
 
+  function provChanged() {
+    const p = document.querySelector('input[name=prov]:checked').value;
+    $('keyLabel').textContent = p === 'openai' ? 'OpenAI API key' : 'Anthropic API key';
+    $('apikey').placeholder = p === 'openai' ? 'sk-...' : 'sk-ant-...';
+    $('keyHelp').textContent = (p === 'openai' ? 'Create one at platform.openai.com/api-keys.' : 'Create one at console.anthropic.com.') + " Saved only on this computer, in Pilot's data/.env file.";
+    $('modelField').hidden = p !== 'openai';
+  }
+  document.querySelectorAll('input[name=prov]').forEach(r => r.addEventListener('change', provChanged));
+  $('cancelKey').addEventListener('click', () => { $('keyCard').hidden = true; });
   $('keyCard').addEventListener('submit', async e => {
-    e.preventDefault(); $('keyErr').textContent = '';
-    try { await api('/api/settings', { anthropic_api_key: $('apikey').value.trim() }); $('apikey').value = ''; $('keyCard').hidden = true; }
-    catch (err) { $('keyErr').textContent = err.message; }
+    e.preventDefault(); $('keyErr').textContent = ''; $('saveKey').disabled = true; $('saveKey').textContent = 'Checking…';
+    const provider = document.querySelector('input[name=prov]:checked').value;
+    try {
+      const r = await api('/api/settings', { provider, api_key: $('apikey').value.trim(), model: provider === 'openai' ? $('model').value : '' });
+      $('apikey').value = ''; $('keyCard').hidden = true; setAiLine(r.provider, r.model);
+    } catch (err) { $('keyErr').textContent = err.message; }
+    finally { $('saveKey').disabled = false; $('saveKey').textContent = 'Check and save'; }
   });
   async function startDemo() {
     $('startErr').textContent = '';

@@ -17,11 +17,10 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-import anthropic
-
-from .agent import MODEL, TOOLS, RunLog, RunResult, Usage, _execute
+from .agent import TOOLS, RunLog, RunResult, _execute
 from .browser import ActionError, Browser
 from .config import Portal
+from .llm import BrainBusy, BrainError, make_brain
 from .vault import totp
 
 SYSTEM_SESSION = """You are a browser assistant working for the person who owns the account you are logging into. You operate a real web browser for them while they watch a live view of it and chat with you.
@@ -97,7 +96,8 @@ class _EmittingLog(RunLog):
 
 class AgentSession(threading.Thread):
     def __init__(self, *, url: str, username: str, password: str, totp_secret: str = "", task: str,
-                 extra_domains: list[str] | None = None, client=None, runs_dir: Path, out_dir: Path,
+                 extra_domains: list[str] | None = None, client=None, provider: str | None = None,
+                 model: str | None = None, runs_dir: Path, out_dir: Path,
                  executable_path: str | None = None, max_cost_usd: float = 2.0, max_steps: int = 80,
                  effort: str = "medium"):
         super().__init__(daemon=True)
@@ -112,6 +112,9 @@ class AgentSession(threading.Thread):
                              instructions=task or "Log in, then wait for my instructions.", max_steps=max_steps)
         self.creds = MemoryCredentials(username, password, totp_secret)
         self.client = client
+        self.provider = provider or ("anthropic" if client is not None else None)
+        self.model = model
+        self.brain = None
         self.runs_dir, self.out_dir = runs_dir, out_dir
         self.executable_path, self.max_cost, self.effort = executable_path, max_cost_usd, effort
         self.inbox: queue.Queue[str] = queue.Queue()
@@ -123,7 +126,6 @@ class AgentSession(threading.Thread):
         self.frame: bytes = b""
         self.frame_id = 0
         self.status = "starting"
-        self.usage = Usage()
         self.downloads: list[dict] = []
         self.created = time.time()
         self.run_dir: Path | None = None
@@ -160,7 +162,7 @@ class AgentSession(threading.Thread):
 
     def _set_status(self, s: str, **extra) -> None:
         self.status = s
-        self._emit({"kind": "status", "status": s, "cost": round(self.usage.usd, 4), **extra})
+        self._emit({"kind": "status", "status": s, "cost": round(self.brain.usd, 4) if self.brain else 0.0, **extra})
 
     def _snap_frame(self, br: Browser) -> None:
         try:
@@ -218,7 +220,6 @@ class AgentSession(threading.Thread):
                 out.append(t)
 
     def run(self) -> None:
-        client = self.client or anthropic.Anthropic()
         self.run_dir = self.runs_dir / f"{datetime.now():%Y%m%d-%H%M%S}-{self.id[:6]}"
         log = _EmittingLog(self.run_dir, self._emit)
         result = RunResult("session", "failed", "", run_dir=self.run_dir)
@@ -226,6 +227,7 @@ class AgentSession(threading.Thread):
         dl_dir = self.out_dir / self.id
         dl_dir.mkdir(parents=True, exist_ok=True)
         try:
+            self.brain = make_brain(self.provider, self.model, self.client, self.effort)
             with Browser(self.portal.allowed_domains, dl_dir, executable_path=self.executable_path,
                          approve=self._approve, secret_values=self.creds.all_secret_values()) as br:
                 self._set_status("opening site")
@@ -233,94 +235,81 @@ class AgentSession(threading.Thread):
                     br.navigate(self.portal.login_url)
                 except Exception as e:
                     self._emit({"kind": "error", "text": f"Could not open {self.portal.login_url}: {e}"})
-                    self._set_status("ended")
                     return
                 self._snap_frame(br)
-                messages: list[dict] = [{"role": "user", "content": [
-                    {"type": "text", "text": f"Site: {self.portal.name}\nAllowed sites: {', '.join(self.portal.allowed_domains)}\n"
-                                             f"Login details available: {', '.join(self.creds.fields('')) or 'none'}\n"
-                                             f"Instruction from the user: {self.portal.task()}"},
-                    {"type": "text", "text": br.snapshot()}]}]
+                self.brain.start(SYSTEM_SESSION, TOOLS, [
+                    f"Site: {self.portal.name}\nAllowed sites: {', '.join(self.portal.allowed_domains)}\n"
+                    f"Login details available: {', '.join(self.creds.fields('')) or 'none'}\n"
+                    f"Instruction from the user: {self.portal.task()}",
+                    br.snapshot()])
                 self._set_status("working")
                 nudged = False
                 for step in range(1, self.portal.max_steps + 1):
                     if self.stop_flag.is_set():
                         break
-                    pending = self._drain()
-                    if pending:
-                        last = messages[-1]
-                        block = {"type": "text", "text": "\n".join(f"Instruction from the user: {p}" for p in pending)}
-                        if last["role"] == "user" and isinstance(last["content"], list):
-                            last["content"].append(block)
-                        else:
-                            messages.append({"role": "user", "content": [block]})
-                    if self.usage.usd > self.max_cost:
+                    for p in self._drain():
+                        self.brain.add_user_text(f"Instruction from the user: {p}")
+                    if self.brain.usd > self.max_cost:
                         self._emit({"kind": "error", "text": f"Stopped: the ${self.max_cost:.2f} cost cap for this session was reached."})
                         break
-                    kw = dict(model=MODEL, max_tokens=16000, system=SYSTEM_SESSION, tools=TOOLS, messages=messages,
-                              output_config={"effort": self.effort}, cache_control={"type": "ephemeral"},
-                              betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-                    fut = pool.submit(client.beta.messages.create, **kw)
+                    fut = pool.submit(self.brain.next)
                     while not fut.done():  # keep the live view fresh while the model thinks
                         self._snap_frame(br)
                         br.page.wait_for_timeout(600)
                     try:
-                        resp = fut.result()
-                    except anthropic.RateLimitError:
+                        turn = fut.result()
+                    except BrainBusy:
                         self._emit({"kind": "error", "text": "The AI service is busy; retrying in 20 seconds."})
                         time.sleep(20)
                         continue
-                    except anthropic.APIStatusError as e:
-                        self._emit({"kind": "error", "text": f"AI service error {e.status_code}: {e.message}"})
+                    except BrainError as e:
+                        self._emit({"kind": "error", "text": str(e)})
                         break
-                    except anthropic.APIConnectionError:
-                        self._emit({"kind": "error", "text": "Could not reach the AI service."})
-                        break
-                    self.usage.add(resp.usage)
-                    notes = [b.text for b in resp.content if b.type == "text" and b.text.strip()]
-                    calls = [b for b in resp.content if b.type == "tool_use"]
-                    for n in notes:
+                    for n in turn.notes:
                         self._emit({"kind": "agent", "text": n})
-                    log.event("model", step=step, stop=resp.stop_reason, notes=[],
-                              calls=[{"name": c.name, "input": c.input} for c in calls], cost=round(self.usage.usd, 4))
-                    messages.append({"role": "assistant", "content": resp.content})
-                    if resp.stop_reason in ("refusal", "max_tokens"):
-                        self._emit({"kind": "error", "text": "The AI stopped on this step." if resp.stop_reason == "max_tokens" else "The AI declined to continue this task."})
+                    log.event("model", step=step, stop=turn.stop, notes=[],
+                              calls=[{"name": c.name, "input": c.input} for c in turn.calls], cost=round(self.brain.usd, 4))
+                    if turn.stop in ("refusal", "truncated"):
+                        self._emit({"kind": "error", "text": "The AI stopped on this step." if turn.stop == "truncated" else "The AI declined to continue this task."})
                         nxt = self._wait_instruction(br)
                         if nxt is None:
                             break
-                        messages.append({"role": "user", "content": f"Instruction from the user: {nxt}"})
+                        self.brain.add_user_text(f"Instruction from the user: {nxt}")
                         continue
-                    if not calls:
-                        if not nudged and not notes:
+                    if not turn.calls:
+                        if not nudged and not turn.notes:
                             nudged = True
-                            messages.append({"role": "user", "content": "Continue with the next browser action, or call finish."})
+                            self.brain.add_user_text("Continue with the next browser action, or call finish.")
                             continue
                         nxt = self._wait_instruction(br)
                         if nxt is None:
                             break
                         nudged = False
-                        messages.append({"role": "user", "content": f"Instruction from the user: {nxt}"})
+                        self.brain.add_user_text(f"Instruction from the user: {nxt}")
                         self._set_status("working")
                         continue
                     results, finished = [], False
-                    for call in calls:
+                    for call in turn.calls:
                         content, is_error, done = _execute(call, br, self.creds, self.portal, self._ask, log,
                                                            self.run_dir, step, result)
-                        results.append({"type": "tool_result", "tool_use_id": call.id, "content": content, "is_error": is_error})
+                        results.append((call.id, content, is_error))
                         finished = finished or done
                         self._snap_frame(br)
                     self.downloads = result.downloads
-                    messages.append({"role": "user", "content": results})
                     if finished:
                         self._emit({"kind": "done", "status": result.status, "text": result.summary})
+                        self.brain.add_results(results)
                         nxt = self._wait_instruction(br)
                         if nxt is None:
                             break
-                        messages[-1]["content"].append({"type": "text", "text": f"Instruction from the user: {nxt}"})
+                        self.brain.add_user_text(f"Instruction from the user: {nxt}")
                         self._set_status("working")
+                    else:
+                        self.brain.add_results(results)
                 else:
                     self._emit({"kind": "error", "text": "Stopped: step limit for this session reached."})
+        except BrainError as e:
+            self._emit({"kind": "error", "text": str(e)})
         except Exception as e:  # never leave the UI hanging
             self._emit({"kind": "error", "text": f"Session crashed: {type(e).__name__}: {e}"})
         finally:

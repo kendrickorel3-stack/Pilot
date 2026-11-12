@@ -71,6 +71,36 @@ class ScriptedClient:
         })
 
 
+class ScriptedOpenAI(ScriptedClient):
+    """Same plan, shaped like client.chat.completions.create responses."""
+
+    def __init__(self, base_url: str):
+        super().__init__(base_url)
+        self.chat = self
+        self.completions = self
+
+    def create(self, **kw):
+        from openai.types.chat import ChatCompletion
+        self.calls.append(kw)
+        snap = ""
+        for m in reversed(kw["messages"]):
+            if m["role"] in ("tool", "user"):
+                c = m["content"]
+                snap = c if isinstance(c, str) else "\n".join(x.get("text", "") for x in c)
+                break
+        i = len(self.calls) - 1
+        name, args = self.plan[i](snap)
+        return ChatCompletion.model_validate({
+            "id": f"chatcmpl-{i}", "object": "chat.completion", "created": 0, "model": kw["model"],
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant", "content": None,
+                "tool_calls": [{"id": f"call_{i:04d}", "type": "function",
+                                "function": {"name": name, "arguments": json.dumps(args)}}]}}],
+            "usage": {"prompt_tokens": 3000, "completion_tokens": 120, "total_tokens": 3120,
+                      "prompt_tokens_details": {"cached_tokens": 2500}},
+        })
+
+
 @pytest.fixture
 def vault(tmp_path):
     v = Vault(tmp_path / "vault.enc", "test passphrase")
@@ -81,14 +111,15 @@ def vault(tmp_path):
     return Vault(tmp_path / "vault.enc", "test passphrase")
 
 
-def test_full_run(tmp_path, vault):
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_full_run(tmp_path, vault, provider):
     with MockPortal() as portal:
         p = Portal(id="acme", client="Rivera Bakery", name="Acme Supplies", login_url=portal.url + "/login",
                    allowed_domains=["127.0.0.1"], instructions="Download every invoice dated on or after {since}.",
                    since="2026-10-01")
-        fake = ScriptedClient(portal.url)
+        fake = ScriptedOpenAI(portal.url) if provider == "openai" else ScriptedClient(portal.url)
         approvals = []
-        r = run_portal(p, vault, out_dir=tmp_path / "out", runs_dir=tmp_path / "runs", client=fake,
+        r = run_portal(p, vault, out_dir=tmp_path / "out", runs_dir=tmp_path / "runs", client=fake, provider=provider,
                        approve=lambda m: approvals.append(m) or False, executable_path=CHROMIUM)
 
         assert r.status == "success", r.summary
@@ -109,7 +140,17 @@ def test_full_run(tmp_path, vault):
         sent = json.dumps([c["messages"] for c in fake.calls], default=lambda o: o.model_dump() if hasattr(o, "model_dump") else str(o))
         for secret in (USER, PASSWORD, TOTP_SECRET):
             assert secret not in sent, "a credential leaked into what the model sees"
-        assert all(c["model"] == "claude-opus-5-5" for c in fake.calls)
+        expected = "gpt-6.1-sol" if provider == "openai" else "claude-opus-5-5"
+        assert all(c["model"] == expected for c in fake.calls)
+        if provider == "openai":
+            first = fake.calls[0]
+            assert first["tools"][0]["type"] == "function" and first["tools"][0]["function"]["strict"] is True
+            last = fake.calls[-1]["messages"]
+            # every tool call is answered by a tool message with the same id, in order
+            asked = [tc["id"] for m in last if m["role"] == "assistant" for tc in m.get("tool_calls", [])]
+            answered = [m["tool_call_id"] for m in last if m["role"] == "tool"]
+            assert asked == answered and len(asked) == 13
+            assert r.cost_usd > 0
 
 
 def test_vault_wrong_passphrase(tmp_path):

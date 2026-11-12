@@ -9,9 +9,9 @@ A web app where you paste a website link and your login, watch an AI agent work 
    - **Windows:** double-click `run.bat`
    - **Mac / Linux:** open a terminal in the folder and run `./run.sh`
 4. Your browser opens at http://127.0.0.1:8000. The first start takes a few minutes while it installs.
-5. Click **Watch a demo** to see it work with no key, or paste your **Anthropic API key** (console.anthropic.com) to run real tasks.
+5. Click **Watch a demo** to see it work with no key, or choose **OpenAI** or **Anthropic (Claude)**, paste your API key and pick a model to run real tasks. The key is checked before it's saved.
 
-Stop it with Ctrl+C in the terminal window. Your key is saved in `data/.env`; downloads go to `data/out/`; step-by-step reports with screenshots go to `data/runs/`.
+Stop it with Ctrl+C in the terminal window. Your key and model choice are saved in `data/.env`; downloads go to `data/out/`; step-by-step reports with screenshots go to `data/runs/`.
 
 ## Using it
 - **Start form:** website link, username, password, optional authenticator secret, and what it should do.
@@ -44,7 +44,7 @@ A `Dockerfile` is included. The server refuses to listen on a public address unl
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium          # or set INVOICE_AGENT_CHROMIUM to an existing Chromium
-export ANTHROPIC_API_KEY=...                   # or `ant auth login`
+export OPENAI_API_KEY=...                      # or ANTHROPIC_API_KEY=...
 export INVOICE_AGENT_VAULT_PASSPHRASE=...      # or you'll be prompted
 cp portals.example.toml portals.toml           # then edit
 python -m invoice_agent vault set rivera-acme username
@@ -52,7 +52,7 @@ python -m invoice_agent vault set rivera-acme password
 python -m invoice_agent vault set rivera-acme totp_secret   # optional
 python -m invoice_agent run --portals portals.toml --show-browser
 ```
-Model: `claude-opus-5-5` at medium effort, with server-side refusal fallback and prompt caching on.
+AI providers (see `invoice_agent/llm.py`): OpenAI (default model `gpt-6.1-sol`, or set `OPENAI_MODEL`) or Anthropic (`claude-opus-5-5`). Set `PILOT_PROVIDER=openai|anthropic` to choose when both keys are present.
 
 ## Tests
 `python -m pytest -q tests` runs the whole harness against a local fake portal (login, authenticator code, invoices, a "Pay now" trap and a planted prompt injection) with a scripted stand-in for the model, so no API key is needed.

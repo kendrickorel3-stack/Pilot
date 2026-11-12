@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .llm import DEFAULT_MODEL, OPENAI_MODELS, active_model, active_provider
 from .session import AgentSession
 
 STATIC = Path(__file__).parent / "static"
@@ -39,7 +40,9 @@ class StartBody(BaseModel):
 
 
 class KeyBody(BaseModel):
-    anthropic_api_key: str = Field(min_length=10, max_length=300)
+    provider: str = Field(default="openai", pattern="^(openai|anthropic)$")
+    api_key: str = Field(min_length=10, max_length=400)
+    model: str = Field(default="", max_length=100)
 
 
 class TextBody(BaseModel):
@@ -61,9 +64,10 @@ def load_env_file(path: Path) -> None:
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-def save_key(path: Path, key: str) -> None:
-    lines = [l for l in (path.read_text().splitlines() if path.exists() else []) if not l.startswith("ANTHROPIC_API_KEY=")]
-    lines.append(f"ANTHROPIC_API_KEY={key}")
+def save_settings(path: Path, values: dict[str, str]) -> None:
+    lines = [l for l in (path.read_text().splitlines() if path.exists() else [])
+             if l.split("=", 1)[0].strip() not in values]
+    lines += [f"{k}={v}" for k, v in values.items()]
     path.write_text("\n".join(lines) + "\n")
     try:
         os.chmod(path, 0o600)
@@ -72,11 +76,39 @@ def save_key(path: Path, key: str) -> None:
 
 
 def has_key() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    return active_provider() is not None
+
+
+def verify_key(provider: str, key: str, model: str) -> str | None:
+    """Return None if the key works and the model is available, else a message for the user."""
+    try:
+        if provider == "openai":
+            import openai
+            try:
+                openai.OpenAI(api_key=key, timeout=20, max_retries=0).models.retrieve(model)
+            except openai.AuthenticationError:
+                return "OpenAI rejected that key. Check it at platform.openai.com/api-keys."
+            except openai.NotFoundError:
+                return f"That key works, but your OpenAI account can't use {model}. Pick another model."
+            except openai.APIConnectionError:
+                return None  # offline right now; save anyway, a run will report problems
+        else:
+            import anthropic
+            try:
+                anthropic.Anthropic(api_key=key, timeout=20, max_retries=0).models.retrieve(model)
+            except anthropic.AuthenticationError:
+                return "Anthropic rejected that key. Check it at console.anthropic.com."
+            except anthropic.NotFoundError:
+                return f"That key works, but your account can't use {model}."
+            except anthropic.APIConnectionError:
+                return None
+    except Exception as e:  # any other provider error: let the user see it
+        return f"Couldn't check the key: {type(e).__name__}: {str(e)[:200]}"
+    return None
 
 
 def create_app(*, demo: bool = False, access_code: str = "", executable_path: str | None = None,
-               data_dir: Path = Path("."), env_file: Path | None = None) -> FastAPI:
+               data_dir: Path = Path("."), env_file: Path | None = None, verify: bool = True) -> FastAPI:
     sessions: dict[str, AgentSession] = {}
 
     @asynccontextmanager
@@ -122,8 +154,10 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
     @app.get("/api/config")
     def config(request: Request):
         local = (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost", "testclient")
+        prov = active_provider()
         return {"demo": demo_defaults, "demo_only": demo, "needs_code": bool(access_code), "has_key": has_key(),
-                "can_save_key": bool(env_file) and local and not demo}
+                "can_save_key": bool(env_file) and local and not demo, "provider": prov,
+                "model": active_model(prov) if prov else None, "openai_models": OPENAI_MODELS}
 
     @app.post("/api/settings")
     def settings(body: KeyBody, request: Request):
@@ -131,12 +165,22 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
         host = request.client.host if request.client else ""
         if not env_file or host not in ("127.0.0.1", "::1", "localhost", "testclient"):
             raise HTTPException(403, "The API key can only be set from the computer running Pilot.")
-        key = body.anthropic_api_key.strip()
-        if not key.startswith("sk-ant-"):
+        key, prov = body.api_key.strip(), body.provider
+        if prov == "anthropic" and not key.startswith("sk-ant-"):
             raise HTTPException(400, "That doesn't look like an Anthropic API key. They start with sk-ant-.")
-        save_key(env_file, key)
-        os.environ["ANTHROPIC_API_KEY"] = key
-        return {"ok": True}
+        if prov == "openai" and (not key.startswith("sk-") or key.startswith("sk-ant-")):
+            raise HTTPException(400, "That doesn't look like an OpenAI API key. They start with sk-.")
+        model = body.model.strip() or DEFAULT_MODEL[prov]
+        if verify:
+            problem = verify_key(prov, key, model)
+            if problem:
+                raise HTTPException(400, problem)
+        values = {"PILOT_PROVIDER": prov, ("OPENAI_API_KEY" if prov == "openai" else "ANTHROPIC_API_KEY"): key}
+        if prov == "openai":
+            values["OPENAI_MODEL"] = model
+        save_settings(env_file, values)
+        os.environ.update(values)
+        return {"ok": True, "provider": prov, "model": model}
 
     @app.post("/api/check")
     def check_code(request: Request):
@@ -155,7 +199,7 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
             client = DemoClient()
             body = body.model_copy(update=demo_defaults)  # the demo only ever runs against the built-in portal
         elif not has_key():
-            raise HTTPException(503, "Add your Anthropic API key first, or try the demo.")
+            raise HTTPException(503, "Add your OpenAI or Anthropic API key first, or try the demo.")
         try:
             s = AgentSession(url=body.url, username=body.username, password=body.password, totp_secret=body.totp_secret,
                              task=body.task, extra_domains=[d for d in body.extra_domains.replace(",", " ").split() if d],
