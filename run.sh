@@ -9,7 +9,9 @@ if [ ! -f .venv/.ready ]; then
   echo "First run: installing Pilot and its browser. This takes a few minutes..."
   "$PY" -m venv .venv
   .venv/bin/python -m pip install -q --upgrade pip
-  .venv/bin/python -m pip install -q -r requirements.txt
+fi
+.venv/bin/python -m pip install -q -r requirements.txt   # quick when nothing changed; picks up new versions after an update
+if [ ! -f .venv/.ready ]; then
   .venv/bin/python -m playwright install chromium
   touch .venv/.ready
 fi

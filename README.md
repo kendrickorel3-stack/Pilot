@@ -19,6 +19,9 @@ Stop it with Ctrl+C in the terminal window. Your key and model choice are saved 
 - **Chat:** send instructions at any time, including after a task finishes.
 - **Approvals:** payments, orders, deletions and submissions pause with Allow / Don't allow buttons.
 - **Login details** live in memory for that session only, are never sent to the AI, and are wiped when it ends.
+- **Screen vision:** on pages drawn as pictures (games, maps, charts, canvas apps) the agent takes screenshots and clicks, drags, scrolls and types by position. It zooms in to read small numbers and timers, and waits for timers to run. Every on-screen action returns a fresh screenshot so it can check the result.
+- **Take control:** click the live view (or "Take control") to drive the real browser yourself: click, scroll, type, keys, Back. "Hand back to agent" lets it carry on from where you left the page.
+- **Purchases:** anything that pays, buys, orders, confirms, deletes or submits waits for your approval, including purchase pop-ups drawn on a canvas, as long as the agent's stated purpose or the clicked element says so. On canvas pages Pilot can't read the button itself, so check the live view.
 - **Cost:** shown live in the top bar; each session stops at $2.00 of AI usage.
 
 ## Hosting it online

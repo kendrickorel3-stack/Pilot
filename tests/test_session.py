@@ -34,7 +34,12 @@ def test_session_flow(tmp_path):
         s.start()
         wait_for(s, "approval")
         assert s.frame_id > 0 and s.frame[:2] == b"\xff\xd8"          # live JPEG frames flowing
-        s.decide(False)
+        end = time.time() + 90
+        while time.time() < end and not any(e["kind"] == "done" for e in s.events):
+            if s.status == "needs approval":
+                s.decide(False)
+                time.sleep(0.3)
+            time.sleep(0.1)
         done = wait_for(s, "done")
         assert done["status"] == "success"
         assert portal.state.paid is False

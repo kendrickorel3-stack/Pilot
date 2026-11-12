@@ -53,6 +53,19 @@ class DecideBody(BaseModel):
     allow: bool
 
 
+class InputBody(BaseModel):
+    type: str = Field(pattern="^(click|scroll|type|key|back)$")
+    x: int = Field(default=0, ge=0, le=4000)
+    y: int = Field(default=0, ge=0, le=4000)
+    dy: int = Field(default=0, ge=-3000, le=3000)
+    text: str = Field(default="", max_length=500)
+    key: str = Field(default="", max_length=20)
+
+
+class ControlBody(BaseModel):
+    on: bool
+
+
 def load_env_file(path: Path) -> None:
     """Minimal KEY=VALUE loader for the local settings file (values never logged)."""
     if not path.exists():
@@ -258,6 +271,21 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
     def decide(sid: str, body: DecideBody, request: Request):
         check(request)
         get(sid).decide(body.allow)
+        return {"ok": True}
+
+    @app.post("/api/sessions/{sid}/input")
+    def user_input(sid: str, body: InputBody, request: Request):
+        check(request)
+        s = get(sid)
+        if not s.control.is_set() and s.is_alive():
+            s.set_control(True)  # touching the page takes control, so you and the agent don't fight
+        s.user_input(body.model_dump())
+        return {"ok": True}
+
+    @app.post("/api/sessions/{sid}/control")
+    def control(sid: str, body: ControlBody, request: Request):
+        check(request)
+        get(sid).set_control(body.on)
         return {"ok": True}
 
     @app.post("/api/sessions/{sid}/stop")

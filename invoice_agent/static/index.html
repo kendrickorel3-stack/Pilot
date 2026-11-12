@@ -80,7 +80,18 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
 .dots { display: flex; gap: 5px; } .dots b { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: block; }
 .url { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .screen { flex: 1; min-height: 240px; display: grid; place-items: center; background: var(--surface-2); overflow: auto; }
-.screen img { width: 100%; height: auto; display: block; }
+.screen img { width: 100%; height: auto; display: block; cursor: pointer; }
+.framewrap { position: relative; width: 100%; }
+.ripple { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; border: 2px solid var(--accent); pointer-events: none; opacity: 0; }
+.ripple.on { animation: rip .5s ease-out; }
+@keyframes rip { from { opacity: 1; transform: scale(.4); } to { opacity: 0; transform: scale(1.6); } }
+@media (prefers-reduced-motion: reduce) { .ripple.on { animation: none; } }
+.btn.small { padding: 4px 10px; font-size: 13px; }
+#ctlBtn[aria-pressed="true"] { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.ctlbar { border-top: 1px solid var(--line); padding: 8px 12px; display: grid; gap: 6px; background: var(--surface); }
+.ctlnote { font-size: 12.5px; color: var(--muted); }
+.ctlrow { display: flex; gap: 6px; flex-wrap: wrap; }
+.ctlrow input { flex: 1 1 160px; min-width: 0; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .screen .wait { color: var(--muted); }
 .side { display: flex; flex-direction: column; min-height: 0; }
 .sidehead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
@@ -173,8 +184,25 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
 
 <main class="live" id="liveView" hidden>
   <section class="pane" aria-label="Live browser">
-    <div class="urlbar"><div class="dots"><b></b><b></b><b></b></div><div class="url" id="urlText">Opening…</div></div>
-    <div class="screen"><img id="frame" alt="Live view of the agent's browser" hidden><span class="wait" id="frameWait">Opening the website…</span></div>
+    <div class="urlbar"><div class="dots"><b></b><b></b><b></b></div><div class="url" id="urlText">Opening…</div>
+      <button class="btn small" id="ctlBtn" type="button" aria-pressed="false">Take control</button></div>
+    <div class="screen"><div class="framewrap" id="framewrap"><img id="frame" alt="Live view of the agent's browser. Click it to click in the browser." hidden><i class="ripple" id="ripple"></i></div><span class="wait" id="frameWait">Opening the website…</span></div>
+    <form class="ctlbar" id="ctlBar" hidden>
+      <span class="ctlnote">You're driving. Click the picture to click, scroll over it to scroll.</span>
+      <div class="ctlrow">
+        <input id="typeText" placeholder="Type into the page…" autocomplete="off" aria-label="Text to type into the page">
+        <button class="btn small" type="submit">Type</button>
+        <button class="btn small" type="button" data-key="Enter">Enter</button>
+        <button class="btn small" type="button" data-key="Tab">Tab</button>
+        <button class="btn small" type="button" data-key="Escape">Esc</button>
+        <button class="btn small" type="button" data-key="Backspace" aria-label="Backspace">⌫</button>
+        <button class="btn small" type="button" data-key="ArrowUp" aria-label="Arrow up">↑</button>
+        <button class="btn small" type="button" data-key="ArrowDown" aria-label="Arrow down">↓</button>
+        <button class="btn small" type="button" data-key="ArrowLeft" aria-label="Arrow left">←</button>
+        <button class="btn small" type="button" data-key="ArrowRight" aria-label="Arrow right">→</button>
+        <button class="btn small" type="button" id="backBtn">Back</button>
+      </div>
+    </form>
   </section>
   <section class="pane side" aria-label="Activity and chat">
     <div class="sidehead"><strong>Activity</strong><div class="spacer"></div>
@@ -292,7 +320,14 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
       case 'type_text': return `Typed “${esc(a.text)}” into ${tgt || 'a field'}`;
       case 'fill_credential': return `Filled in your ${FIELD[a.field] || a.field}`;
       case 'select_option': return `Chose “${esc(a.option)}”`;
-      case 'screenshot': return 'Looked at the page';
+      case 'screenshot': return 'Looked at the screen';
+      case 'zoom': return `Zoomed in to read (${a.x},${a.y})`;
+      case 'click_at': return `Clicked at (${a.x},${a.y})` + (a.purpose ? `: ${esc(a.purpose)}` : '');
+      case 'drag': return `Dragged from (${a.from_x},${a.from_y}) to (${a.to_x},${a.to_y})`;
+      case 'scroll': return `Scrolled ${a.delta_y > 0 ? 'down' : 'up'}`;
+      case 'press_key': return `Pressed ${esc(a.key)}`;
+      case 'type_keys': return 'Typed into the page';
+      case 'wait': return `Waited ${a.seconds}s`;
       default: return esc(e.name);
     }
   }
@@ -303,7 +338,7 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
   }
 
   function startLive() {
-    show('liveView'); feed.innerHTML = ''; $('frame').hidden = true; $('frameWait').hidden = false;
+    show('liveView'); feed.innerHTML = ''; setControl(false); $('frame').hidden = true; $('frameWait').hidden = false;
     $('stopBtn').hidden = false; $('newBtn').hidden = true; $('msg').disabled = $('sendBtn').disabled = false;
     $('cost').hidden = false; $('cost').textContent = '$0.000';
     es = new EventSource(`/api/sessions/${sid}/events?code=${encodeURIComponent(code)}`);
@@ -334,9 +369,36 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
       case 'question': $('questionText').textContent = e.text; $('questionCard').hidden = false; $('answer').value = ''; $('answer').focus(); break;
       case 'done': add('done', `<div class="bubble"><strong>${e.status === 'success' ? 'Done' : e.status === 'partial' ? 'Partly done' : 'Couldn’t finish'}.</strong> ${esc(e.text)}</div>`, e.t); break;
       case 'error': add('error', `<div class="bubble">${esc(e.text)}</div>`, e.t); break;
+      case 'control': setControl(e.on); break;
       case 'closed': ended(); break;
     }
   }
+  let inControl = false;
+  function setControl(on) {
+    inControl = on; $('ctlBar').hidden = !on;
+    $('ctlBtn').textContent = on ? 'Hand back to agent' : 'Take control';
+    $('ctlBtn').setAttribute('aria-pressed', String(on));
+  }
+  const VW = 1280, VH = 900;
+  function pagePoint(e) {
+    const r = $('frame').getBoundingClientRect();
+    return { x: Math.round((e.clientX - r.left) / r.width * VW), y: Math.round((e.clientY - r.top) / r.height * VH), px: e.clientX - r.left, py: e.clientY - r.top };
+  }
+  const send = ev => sid && api(`/api/sessions/${sid}/input`, ev).catch(err => add('error', `<div class="bubble">${esc(err.message)}</div>`));
+  $('frame').addEventListener('click', e => {
+    const p = pagePoint(e); const rp = $('ripple');
+    rp.style.left = p.px + 'px'; rp.style.top = p.py + 'px'; rp.classList.remove('on'); void rp.offsetWidth; rp.classList.add('on');
+    send({ type: 'click', x: p.x, y: p.y });
+  });
+  $('frame').addEventListener('wheel', e => {
+    if (!inControl) return;
+    e.preventDefault(); const p = pagePoint(e); send({ type: 'scroll', x: p.x, y: p.y, dy: Math.round(e.deltaY) });
+  }, { passive: false });
+  $('ctlBtn').addEventListener('click', () => sid && api(`/api/sessions/${sid}/control`, { on: !inControl }).catch(() => {}));
+  $('ctlBar').addEventListener('submit', e => { e.preventDefault(); const t = $('typeText').value; if (!t) return; $('typeText').value = ''; send({ type: 'type', text: t }); });
+  $('ctlBar').querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', () => send({ type: 'key', key: b.dataset.key })));
+  $('backBtn').addEventListener('click', () => send({ type: 'back' }));
+
   $('allowBtn').addEventListener('click', () => api(`/api/sessions/${sid}/decide`, { allow: true }).catch(() => {}));
   $('denyBtn').addEventListener('click', () => api(`/api/sessions/${sid}/decide`, { allow: false }).catch(() => {}));
   $('questionCard').addEventListener('submit', e => {

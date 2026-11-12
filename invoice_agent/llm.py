@@ -137,9 +137,12 @@ class OpenAIBrain(Brain):
     def add_results(self, results, extra_texts=None):
         images = []
         for cid, content, is_error in results:
-            if isinstance(content, list):  # screenshot: tool messages are text-only, so send the image after them
-                images += [b for b in content if b.get("type") == "image"]
-                text = "Screenshot of the current page is attached in the next message."
+            if isinstance(content, list):  # tool messages are text-only, so images follow in a user message
+                imgs = [b for b in content if b.get("type") == "image"]
+                images += imgs
+                text = "\n\n".join(b["text"] for b in content if b.get("type") == "text")
+                if imgs:
+                    text += ("\n\n" if text else "") + f"[Screenshot {len(images)} is attached in the next message.]"
             else:
                 text = ("ERROR: " if is_error else "") + str(content)
             self.messages.append({"role": "tool", "tool_call_id": cid, "content": text})

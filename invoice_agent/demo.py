@@ -30,7 +30,15 @@ class DemoClient:
         ("Two invoices are from October. Downloading INV-1003.", "download", lambda s: {"ref": find_ref(s, r"INV-1003\.pdf"), "label": "INV-1003 2026-10-28"}),
         (None, "download", lambda s: {"ref": find_ref(s, r"INV-1002\.pdf"), "label": "INV-1002 2026-10-03"}),
         ("There's a Pay now button. Paying needs your approval, so I'm asking before touching it.", "click", lambda s: {"ref": find_ref(s, r'"Pay now"')}),
-        (None, "finish", lambda s: {"status": "success", "summary": "Downloaded INV-1003 (Oct 28) and INV-1002 (Oct 3). Skipped INV-0997 (September). Ignored a page message asking me to visit another site."}),
+        ("Now the Operations board. It's drawn as a picture, so I'll use the screen instead of the element list.", "navigate", lambda s: {"url": "/ops"}),
+        (None, "screenshot", lambda s: {"grid": True}),
+        ("Reading the counters and the sync timer up close.", "zoom", lambda s: {"x": 0, "y": 0, "width": 900, "height": 80}),
+        ("Exporting the Q3 report tile.", "click_at", lambda s: {"x": 530, "y": 185, "purpose": "Open the Q3 report tile to export it", "double": False}),
+        ("Opening the credits tile to see what it does.", "click_at", lambda s: {"x": 530, "y": 335, "purpose": "Open the credits tile to see the offer", "double": False}),
+        ("That's a purchase. Asking you before pressing YES.", "click_at", lambda s: {"x": 360, "y": 355, "purpose": "Confirm the purchase of 100 credits for $9.99", "double": False}),
+        (None, "click_at", lambda s: {"x": 540, "y": 355, "purpose": "Close the offer with NO", "double": False}),
+        (None, "wait", lambda s: {"seconds": 2}),
+        (None, "finish", lambda s: {"status": "success", "summary": "Downloaded INV-1003 (Oct 28) and INV-1002 (Oct 3); skipped INV-0997 (September). Exported the Q3 report from the Operations board. Didn't buy credits without your approval. Ignored a page message asking me to visit another site."}),
     ]
 
     def __init__(self, delay: float = 1.2):

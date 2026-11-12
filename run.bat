@@ -13,7 +13,9 @@ if not exist ".venv\.ready" (
   echo First run: installing Pilot and its browser. This takes a few minutes...
   %PY% -m venv .venv || goto fail
   .venv\Scripts\python -m pip install -q --upgrade pip || goto fail
-  .venv\Scripts\python -m pip install -q -r requirements.txt || goto fail
+)
+.venv\Scripts\python -m pip install -q -r requirements.txt || goto fail
+if not exist ".venv\.ready" (
   .venv\Scripts\python -m playwright install chromium || goto fail
   type nul > ".venv\.ready"
 )

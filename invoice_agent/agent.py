@@ -28,6 +28,11 @@ How you work:
 - Log in with fill_credential. You never see the username, password or one-time code; the system types them into the field you choose. If a one-time code is needed and fill_credential with field "totp" fails, use ask_human to get the code.
 - Download each invoice or statement that matches the task with the download tool, labelled with the invoice number and date as shown on the page. Check pagination or date filters so you don't miss documents in the requested period.
 - When the task is complete, or cannot be completed, call finish with a short factual summary listing what you downloaded and anything you could not get.
+Seeing the screen:
+- The element list covers normal web pages. Pages or parts drawn as pictures (games, maps, charts, canvas apps; the snapshot lists them as "Drawn areas") are invisible to it, and some icons only show as "(clickable)" entries. For those, take a screenshot and act by position with click_at, drag, scroll, press_key and type_keys. Coordinates are screen pixels, 0,0 at the top-left of the 1280x900 view.
+- After every on-screen action you get a fresh screenshot. Check that it did what you expected before moving on.
+- Use zoom to read small numbers, counters and timers exactly. Use wait to let a timer run or a page settle.
+- Purchases, payment pop-ups, "buy"/"order"/"confirm" buttons and anything spending money or premium currency pause for approval; say so plainly in purpose.
 
 Rules you must follow:
 - You only read and download. Never pay, order, submit, approve, cancel, delete, change settings or contact anyone. The system blocks such actions; if one is blocked, do not try again or look for another way to do it.
@@ -52,7 +57,29 @@ TOOLS = [
     _tool("select_option", "Choose an option in a dropdown by its visible text.", {"ref": REF, "option": {"type": "string"}}, ["ref", "option"]),
     _tool("download", "Click a download link or button and save the file. Label it with invoice number and date.",
           {"ref": REF, "label": {"type": "string"}}, ["ref", "label"]),
-    _tool("screenshot", "Get an image of the current page when the text snapshot is not enough.", {}, []),
+    _tool("screenshot", "See the screen as an image (1280x900 px). Use it on pages drawn as pictures (games, maps, "
+          "charts, canvas apps), to read numbers and timers, or when the element list doesn't match what you expect. "
+          "grid=true overlays labelled 100 px gridlines for precise coordinates.",
+          {"grid": {"type": "boolean"}}, ["grid"]),
+    _tool("zoom", "See one area of the screen up close, to read small numbers, counters and timers.",
+          {"x": {"type": "integer"}, "y": {"type": "integer"}, "width": {"type": "integer"}, "height": {"type": "integer"}},
+          ["x", "y", "width", "height"]),
+    _tool("click_at", "Click a point on the screen by pixel position (from a screenshot or an element's @x,y). "
+          "Say in purpose what you are clicking and why.",
+          {"x": {"type": "integer"}, "y": {"type": "integer"}, "purpose": {"type": "string"}, "double": {"type": "boolean"}},
+          ["x", "y", "purpose", "double"]),
+    _tool("drag", "Press at one point and drag to another, e.g. to pan a map or move a slider.",
+          {"from_x": {"type": "integer"}, "from_y": {"type": "integer"}, "to_x": {"type": "integer"}, "to_y": {"type": "integer"},
+           "purpose": {"type": "string"}}, ["from_x", "from_y", "to_x", "to_y", "purpose"]),
+    _tool("scroll", "Scroll with the mouse wheel over a point. Positive delta_y scrolls down; on maps it may zoom.",
+          {"x": {"type": "integer"}, "y": {"type": "integer"}, "delta_x": {"type": "integer"}, "delta_y": {"type": "integer"}},
+          ["x", "y", "delta_x", "delta_y"]),
+    _tool("press_key", "Press one key: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, PageUp, PageDown, "
+          "Home, End, KeyA-KeyZ, Digit0-Digit9.", {"key": {"type": "string"}}, ["key"]),
+    _tool("type_keys", "Type text into whatever is focused (after click_at on a field). Not for passwords.",
+          {"text": {"type": "string"}}, ["text"]),
+    _tool("wait", "Wait 1-30 seconds, e.g. for a timer, an animation or a page to load. You get a fresh screenshot after.",
+          {"seconds": {"type": "integer"}}, ["seconds"]),
     _tool("ask_human", "Ask the bookkeeper one specific question, e.g. for a one-time code sent by SMS.",
           {"question": {"type": "string"}}, ["question"]),
     _tool("finish", "End the task.", {"status": {"type": "string", "enum": ["success", "partial", "failed"]},
@@ -197,11 +224,33 @@ def _execute(call, br: Browser, vault: Vault, portal: Portal, ask_human, log: Ru
             note = "Already downloaded before (identical file), skipped." if d.duplicate else f"Saved as {d.path.name}."
             br.screenshot(shot)
             return f"{note}\n\n{br.snapshot()}", False, False
-        elif name == "screenshot":
-            data = br.screenshot(shot)
-            log.event("tool", step=step, name=name, ok=True, shot=shot.name)
-            return [{"type": "image", "source": {"type": "base64", "media_type": "image/png",
-                                                 "data": base64.standard_b64encode(data).decode()}}], False, False
+        elif name in ("screenshot", "zoom"):
+            if name == "zoom":
+                data = br.look(region=(args["x"], args["y"], args["width"], args["height"]), quality=85)
+            else:
+                data = br.look(grid=bool(args.get("grid")))
+            shot.with_suffix(".jpg").write_bytes(data)
+            log.event("tool", step=step, name=name, args=_safe_args(name, args), ok=True, url=br.page.url, shot=shot.with_suffix(".jpg").name)
+            note = "Zoomed area" if name == "zoom" else f"Screen at {br.page.url}"
+            return [{"type": "text", "text": note}, _img(data)], False, False
+        elif name in VISION_ACTIONS:
+            if name == "click_at":
+                hit = br.click_at(int(args["x"]), int(args["y"]), args.get("purpose", ""), bool(args.get("double")))
+                args = {**args, "target": hit}
+            elif name == "drag":
+                br.drag(int(args["from_x"]), int(args["from_y"]), int(args["to_x"]), int(args["to_y"]), args.get("purpose", ""))
+            elif name == "scroll":
+                br.scroll(int(args["x"]), int(args["y"]), int(args["delta_x"]), int(args["delta_y"]))
+            elif name == "press_key":
+                br.press_key(args["key"])
+            elif name == "type_keys":
+                br.type_keys(args["text"])
+            elif name == "wait":
+                br.wait(float(args["seconds"]))
+            data = br.look()
+            shot.with_suffix(".jpg").write_bytes(data)
+            log.event("tool", step=step, name=name, args=_safe_args(name, args), ok=True, url=br.page.url, shot=shot.with_suffix(".jpg").name)
+            return [{"type": "text", "text": br.snapshot()}, _img(data)], False, False
         elif name == "ask_human":
             if not ask_human:
                 raise ActionError("No one is available to answer in unattended mode. Finish with status 'failed' and explain what is needed.")
@@ -222,7 +271,17 @@ def _execute(call, br: Browser, vault: Vault, portal: Portal, ask_human, log: Ru
         return f"That action failed: {msg}\n\n{br.snapshot()}", True, False
 
 
+VISION_ACTIONS = {"click_at", "drag", "scroll", "press_key", "type_keys", "wait"}
+
+
+def _img(data: bytes) -> dict:
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                        "data": base64.standard_b64encode(data).decode()}}
+
+
 def _safe_args(name: str, args: dict) -> dict:
+    if name == "type_keys":
+        return {"text": f"[{len(args.get('text', ''))} characters]"}
     return dict(args)  # credentials never pass through args, so logging them is safe
 
 
