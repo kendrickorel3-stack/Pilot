@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: start card centered; live view = browser pane left, activity + chat column right; stacks on phones. */
+:root {
+  --bg: #f4f5f2; --surface: #ffffff; --surface-2: #eef0ec; --line: #d9ddd6; --fg: #1b211e; --muted: #5d6862;
+  --accent: #0f6b5c; --accent-fg: #ffffff; --accent-soft: #dcefe9;
+  --warn: #9a5b00; --warn-soft: #fbefd9; --bad: #b3322a; --bad-soft: #fbe6e3; --good: #23784a;
+  --font: 'IBM Plex Sans', system-ui, sans-serif; --mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --surface: #1a1f1c; --surface-2: #222925; --line: #313a35; --fg: #e5ebe7; --muted: #95a39b;
+  --accent: #3fb59d; --accent-fg: #06201a; --accent-soft: #1d3a33;
+  --warn: #f0b45a; --warn-soft: #3a2d17; --bad: #f07a70; --bad-soft: #3b1f1c; --good: #6fcf97; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121614; --surface: #1a1f1c; --surface-2: #222925; --line: #313a35; --fg: #e5ebe7; --muted: #95a39b;
+  --accent: #3fb59d; --accent-fg: #06201a; --accent-soft: #1d3a33;
+  --warn: #f0b45a; --warn-soft: #3a2d17; --bad: #f07a70; --bad-soft: #3b1f1c; --good: #6fcf97; color-scheme: dark }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--font); }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.top { display: flex; align-items: center; gap: 12px; padding: 12px max(16px, env(safe-area-inset-left)); padding-top: calc(12px + env(safe-area-inset-top)); border-bottom: 1px solid var(--line); background: var(--surface); }
+.logo { font-weight: 600; letter-spacing: -0.01em; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.logo i { width: 18px; height: 18px; border-radius: 5px; background: var(--accent); display: inline-block; position: relative; }
+.logo i::after { content: ""; position: absolute; inset: 5px 4px 5px 6px; border-left: 6px solid var(--accent-fg); border-top: 4px solid transparent; border-bottom: 4px solid transparent; width: 0; height: 0; }
+.spacer { flex: 1; }
+.chip { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+.chip.working { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.chip.wait { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.chip.ended { background: var(--surface-2); }
+.cost { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px 14px; font-weight: 500; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* start */
+.start { padding: 32px max(16px, env(safe-area-inset-right)) 48px max(16px, env(safe-area-inset-left)); display: grid; place-items: start center; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 24px; width: min(560px, 100%); }
+.card h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: -0.02em; text-wrap: balance; }
+.card .lead { margin: 0 0 20px; color: var(--muted); }
+.field { display: grid; gap: 6px; margin-bottom: 14px; }
+.field label { font-weight: 500; font-size: 14px; }
+.field small { color: var(--muted); font-size: 12.5px; }
+.field input, .field textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.field textarea { min-height: 84px; resize: vertical; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
+.note { font-size: 13px; color: var(--muted); background: var(--surface-2); border-radius: 8px; padding: 10px 12px; margin: 4px 0 16px; }
+.banner { font-size: 13px; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.seg { border: 0; padding: 0; margin: 0 0 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+.seg label { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+.seg label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.field select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit; }
+.ailine { margin: -8px 0 16px; font-size: 13px; color: var(--muted); }
+.ailine button { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: 13px; }
+.stack { display: grid; gap: 16px; width: min(560px, 100%); }
+.row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.card.wide { width: min(820px, 100%); }
+.fixed { font-size: 13px; background: var(--surface-2); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; color: var(--muted); }
+#ruleText { min-height: 340px; font: 13px/1.5 var(--mono); }
+code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.it.step.rule { color: var(--warn); border-left-color: var(--warn); }
+.ok-note { color: var(--good); font-size: 14px; margin: 0 0 12px; }
+.err { color: var(--bad); font-size: 14px; margin: 8px 0 0; min-height: 1.2em; }
+
+/* live */
+.live { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 16px max(16px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); height: calc(100% - 57px); }
+.pane { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.urlbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.dots { display: flex; gap: 5px; } .dots b { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: block; }
+.url { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.screen { flex: 1; min-height: 240px; display: grid; place-items: center; background: var(--surface-2); overflow: auto; }
+.screen img { width: 100%; height: auto; display: block; cursor: pointer; }
+.framewrap { position: relative; width: 100%; }
+.ripple { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; border: 2px solid var(--accent); pointer-events: none; opacity: 0; }
+.ripple.on { animation: rip .5s ease-out; }
+@keyframes rip { from { opacity: 1; transform: scale(.4); } to { opacity: 0; transform: scale(1.6); } }
+@media (prefers-reduced-motion: reduce) { .ripple.on { animation: none; } }
+.btn.small { padding: 4px 10px; font-size: 13px; }
+#ctlBtn[aria-pressed="true"] { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.ctlbar { border-top: 1px solid var(--line); padding: 8px 12px; display: grid; gap: 6px; background: var(--surface); }
+.ctlnote { font-size: 12.5px; color: var(--muted); }
+.ctlrow { display: flex; gap: 6px; flex-wrap: wrap; }
+.ctlrow input { flex: 1 1 160px; min-width: 0; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.screen .wait { color: var(--muted); }
+.side { display: flex; flex-direction: column; min-height: 0; }
+.sidehead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.feed { flex: 1; overflow-y: auto; padding: 12px; display: grid; gap: 8px; align-content: start; min-height: 120px; }
+.it { font-size: 14px; display: grid; gap: 2px; }
+.it .tm { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.it.step { color: var(--muted); padding-left: 10px; border-left: 2px solid var(--line); }
+.it.step.bad { color: var(--bad); border-left-color: var(--bad); }
+.it.step.dl { color: var(--good); border-left-color: var(--good); }
+.it.step a { color: inherit; }
+.bubble { padding: 8px 12px; border-radius: 10px; max-width: 92%; }
+.it.agent .bubble { background: var(--surface-2); }
+.it.you { justify-items: end; } .it.you .bubble { background: var(--accent); color: var(--accent-fg); }
+.it.done .bubble { background: var(--accent-soft); color: var(--fg); border: 1px solid var(--accent); }
+.it.error .bubble { background: var(--bad-soft); color: var(--bad); }
+.ask { margin: 0 12px 10px; border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; }
+.ask p { margin: 0; font-size: 14px; }
+.ask .row { display: flex; gap: 8px; }
+.ask input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.composer textarea { flex: 1; min-width: 0; resize: none; height: 42px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+@media (max-width: 860px) {
+  .live { grid-template-columns: 1fr; height: auto; }
+  .screen { min-height: 200px; }
+  .side { height: 70vh; }
+  .two { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="logo"><i></i>Pilot</div>
+  <div class="spacer"></div>
+  <button class="btn small" id="rulesBtn" type="button" hidden>Rules</button>
+  <span class="cost" id="cost" hidden></span>
+  <span class="chip" id="chip" hidden>Starting</span>
+</header>
+
+<main class="start" id="codeView" hidden>
+  <form class="card" id="codeForm">
+    <h1>Enter access code</h1>
+    <p class="lead">This server is private. Ask whoever runs it for the code.</p>
+    <div class="field"><label for="code">Access code</label><input id="code" type="password" autocomplete="off" required></div>
+    <button class="btn primary" type="submit">Continue</button>
+    <p class="err" id="codeErr"></p>
+  </form>
+</main>
+
+<main class="start" id="startView" hidden>
+  <div class="stack">
+  <form class="card" id="keyCard" hidden autocomplete="off">
+    <h1>Connect the AI</h1>
+    <p class="lead">Pilot needs an AI to decide each step. Paste an API key; usage is billed to that account.</p>
+    <fieldset class="seg" aria-label="AI provider">
+      <label><input type="radio" name="prov" value="openai" checked> OpenAI</label>
+      <label><input type="radio" name="prov" value="anthropic"> Anthropic (Claude)</label>
+    </fieldset>
+    <div class="field"><label for="apikey" id="keyLabel">OpenAI API key</label><input id="apikey" type="password" placeholder="sk-..." autocomplete="off" required>
+      <small id="keyHelp">Create one at platform.openai.com/api-keys. Saved only on this computer, in Pilot's data/.env file.</small></div>
+    <div class="field" id="modelField"><label for="model">Model</label>
+      <select id="model"></select>
+      <small>Prices per million tokens from OpenAI's pricing page (Nov 2026). A typical task uses well under $0.50.</small></div>
+    <div class="row-btns"><button class="btn primary" type="submit" id="saveKey">Check and save</button><button class="btn" type="button" id="demoBtn2">Try the demo first</button><button class="btn" type="button" id="cancelKey" hidden>Cancel</button></div>
+    <p class="err" id="keyErr"></p>
+  </form>
+  <form class="card" id="startForm" autocomplete="off">
+    <h1>Send an agent to a website</h1>
+    <p class="lead">Paste the link and your login. You'll watch it work live and can tell it what to do at any time.</p>
+    <p class="ailine" id="aiLine" hidden></p>
+    <div class="banner" id="demoBanner" hidden>Demo mode: the form is filled in for a built-in test portal, and a scripted run plays instead of the AI.</div>
+    <div class="field"><label for="url">Website link</label><input id="url" type="url" placeholder="https://portal.example.com/login" required></div>
+    <div class="two">
+      <div class="field"><label for="user">Username or email</label><input id="user" autocomplete="off"></div>
+      <div class="field"><label for="pass">Password</label><input id="pass" type="password" autocomplete="new-password"></div>
+    </div>
+    <div class="field"><label for="task">What should it do?</label>
+      <textarea id="task" placeholder="Log in and download every invoice from last month."></textarea>
+      <small>Leave empty to just log in and wait for your instructions.</small></div>
+    <details><summary>More options</summary>
+      <div class="field"><label for="totp">Authenticator secret (optional)</label><input id="totp" autocomplete="off" placeholder="Base32 key from the site's 2-step setup">
+        <small>Lets the agent make its own 6-digit codes. Without it, it will ask you for the code.</small></div>
+      <div class="field"><label for="extra">Other sites it may use (optional)</label><input id="extra" placeholder="login.microsoftonline.com">
+        <small>For sign-in pages hosted elsewhere. It can't leave the website's own domain otherwise.</small></div>
+    </details>
+    <p class="note">Your login is kept in the server's memory for this session only, is typed into the site by the server, and is never shown to the AI. Payments, orders, deletions and submissions wait for you to approve. Only use accounts you own, on sites that allow automated access.</p>
+    <div class="row-btns"><button class="btn primary" type="submit" id="go">Start</button><button class="btn" type="button" id="demoBtn">Watch a demo</button></div>
+    <p class="err" id="startErr"></p>
+  </form>
+  </div>
+</main>
+
+<main class="start" id="rulesView" hidden>
+  <div class="card wide">
+    <h1>Rules</h1>
+    <p class="lead">The agent reads these before every task. Changes apply to the next task you start. Files live in <code id="rulesFolder"></code>.</p>
+    <div class="fixed"><strong>Always on, can't be changed here:</strong> the AI never sees your passwords or codes; logins are typed only on the session's own site; it won't try to get past CAPTCHAs or bot checks; text on websites can't give it orders; every session has a cost cap (you choose the amount in Settings).</div>
+    <div class="field"><label for="ruleFile">File</label><select id="ruleFile"></select></div>
+    <div class="field" id="newSiteField" hidden><label for="newSite">Website domain for the new note</label><input id="newSite" placeholder="portal.example.com" autocomplete="off"></div>
+    <div class="field"><label for="ruleText" id="ruleHelp">Instructions</label><textarea id="ruleText" spellcheck="false"></textarea></div>
+    <div class="row-btns"><button class="btn primary" type="button" id="ruleSave">Save</button><button class="btn danger" type="button" id="ruleDelete" hidden>Delete this note</button><button class="btn" type="button" id="rulesBack">Back</button></div>
+    <p class="ok-note" id="ruleOk"></p>
+    <p class="err" id="ruleErr"></p>
+  </div>
+</main>
+
+<main class="live" id="liveView" hidden>
+  <section class="pane" aria-label="Live browser">
+    <div class="urlbar"><div class="dots"><b></b><b></b><b></b></div><div class="url" id="urlText">Opening…</div>
+      <button class="btn small" id="ctlBtn" type="button" aria-pressed="false">Take control</button></div>
+    <div class="screen"><div class="framewrap" id="framewrap"><img id="frame" alt="Live view of the agent's browser. Click it to click in the browser." hidden><i class="ripple" id="ripple"></i></div><span class="wait" id="frameWait">Opening the website…</span></div>
+    <form class="ctlbar" id="ctlBar" hidden>
+      <span class="ctlnote">You're driving. Click the picture to click, scroll over it to scroll.</span>
+      <div class="ctlrow">
+        <input id="typeText" placeholder="Type into the page…" autocomplete="off" aria-label="Text to type into the page">
+        <button class="btn small" type="submit">Type</button>
+        <button class="btn small" type="button" data-key="Enter">Enter</button>
+        <button class="btn small" type="button" data-key="Tab">Tab</button>
+        <button class="btn small" type="button" data-key="Escape">Esc</button>
+        <button class="btn small" type="button" data-key="Backspace" aria-label="Backspace">⌫</button>
+        <button class="btn small" type="button" data-key="ArrowUp" aria-label="Arrow up">↑</button>
+        <button class="btn small" type="button" data-key="ArrowDown" aria-label="Arrow down">↓</button>
+        <button class="btn small" type="button" data-key="ArrowLeft" aria-label="Arrow left">←</button>
+        <button class="btn small" type="button" data-key="ArrowRight" aria-label="Arrow right">→</button>
+        <button class="btn small" type="button" id="backBtn">Back</button>
+      </div>
+    </form>
+  </section>
+  <section class="pane side" aria-label="Activity and chat">
+    <div class="sidehead"><strong>Activity</strong><div class="spacer"></div>
+      <button class="btn danger" id="stopBtn" type="button">Stop</button>
+      <button class="btn" id="newBtn" type="button" hidden>New session</button></div>
+    <div class="feed" id="feed" aria-live="polite"></div>
+    <div class="ask" id="approveCard" hidden><p id="approveText"></p>
+      <div class="row"><button class="btn primary" id="allowBtn" type="button">Allow</button><button class="btn" id="denyBtn" type="button">Don't allow</button></div></div>
+    <form class="ask" id="questionCard" hidden><p id="questionText"></p>
+      <div class="row"><input id="answer" autocomplete="off" aria-label="Your answer"><button class="btn primary" type="submit">Send</button></div></form>
+    <form class="composer" id="composer">
+      <textarea id="msg" placeholder="Tell the agent what to do…" aria-label="Message to the agent"></textarea>
+      <button class="btn primary" type="submit" id="sendBtn">Send</button>
+    </form>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let code = '', sid = null, es = null, needsCode = false, demoOnly = false, canSave = false;
+  function setAiLine(provider, model) {
+    const line = $('aiLine');
+    if (!provider || demoOnly) { line.hidden = true; return; }
+    line.hidden = false;
+    line.innerHTML = `AI: ${provider === 'openai' ? 'OpenAI' : 'Anthropic'} · ${model}` + (canSave ? ' · <button type="button" id="changeAi">Change</button>' : '');
+    const c = $('changeAi'); if (c) c.onclick = () => { $('keyCard').hidden = false; $('cancelKey').hidden = false; $('apikey').focus(); };
+  }
+  try { code = sessionStorage.getItem('pilot-code') || ''; } catch (e) {}
+
+  async function api(path, body, method) {
+    const r = await fetch(path, { method: method || (body === undefined ? 'GET' : 'POST'), headers: { 'content-type': 'application/json', 'x-access-code': code }, body: body === undefined || method === 'DELETE' ? undefined : JSON.stringify(body) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || `Request failed (${r.status})`);
+    return data;
+  }
+  let lastView = 'startView';
+  function show(view) { for (const v of ['codeView', 'startView', 'liveView', 'rulesView']) $(v).hidden = v !== view; if (view !== 'rulesView') lastView = view; }
+
+  async function boot() {
+    const cfg = await api('/api/config');
+    needsCode = cfg.needs_code;
+    demoOnly = cfg.demo_only;
+    if (demoOnly) {
+      $('demoBanner').hidden = false;
+      $('url').value = cfg.demo.url; $('user').value = cfg.demo.username; $('pass').value = cfg.demo.password;
+      $('totp').value = cfg.demo.totp_secret; $('task').value = cfg.demo.task;
+    }
+    canSave = cfg.can_save_key;
+    const labels = { 'gpt-6.1-sol': 'gpt-6.1-sol: balanced, $2 in / $10 out (recommended)', 'gpt-6.1-terra': 'gpt-6.1-terra: cheaper, $1 / $5', 'gpt-6-astra': 'gpt-6-astra: strongest, $10 / $50' };
+    $('model').innerHTML = cfg.openai_models.map(m => `<option value="${m}">${labels[m] || m}</option>`).join('');
+    setAiLine(cfg.provider, cfg.model);
+    $('keyCard').hidden = cfg.has_key || demoOnly || !canSave;
+    $('rulesBtn').hidden = !cfg.can_edit_rules;
+    if (needsCode && !code) return show('codeView');
+    if (needsCode) { try { await api('/api/check', {}); } catch { code = ''; return show('codeView'); } }
+    show('startView');
+  }
+
+  $('codeForm').addEventListener('submit', async e => {
+    e.preventDefault(); code = $('code').value.trim();
+    try { await api('/api/check', {}); try { sessionStorage.setItem('pilot-code', code); } catch {} show('startView'); }
+    catch (err) { $('codeErr').textContent = 'That code was not accepted.'; }
+  });
+
+  function provChanged() {
+    const p = document.querySelector('input[name=prov]:checked').value;
+    $('keyLabel').textContent = p === 'openai' ? 'OpenAI API key' : 'Anthropic API key';
+    $('apikey').placeholder = p === 'openai' ? 'sk-...' : 'sk-ant-...';
+    $('keyHelp').textContent = (p === 'openai' ? 'Create one at platform.openai.com/api-keys.' : 'Create one at console.anthropic.com.') + " Saved only on this computer, in Pilot's data/.env file.";
+    $('modelField').hidden = p !== 'openai';
+  }
+  document.querySelectorAll('input[name=prov]').forEach(r => r.addEventListener('change', provChanged));
+  $('cancelKey').addEventListener('click', () => { $('keyCard').hidden = true; });
+  $('keyCard').addEventListener('submit', async e => {
+    e.preventDefault(); $('keyErr').textContent = ''; $('saveKey').disabled = true; $('saveKey').textContent = 'Checking…';
+    const provider = document.querySelector('input[name=prov]:checked').value;
+    try {
+      const r = await api('/api/settings', { provider, api_key: $('apikey').value.trim(), model: provider === 'openai' ? $('model').value : '' });
+      $('apikey').value = ''; $('keyCard').hidden = true; setAiLine(r.provider, r.model);
+    } catch (err) { $('keyErr').textContent = err.message; }
+    finally { $('saveKey').disabled = false; $('saveKey').textContent = 'Check and save'; }
+  });
+  async function startDemo() {
+    $('startErr').textContent = '';
+    try { const r = await api('/api/sessions', { url: 'demo', demo: true }); sid = r.id; startLive(); }
+    catch (err) { $('startErr').textContent = err.message; }
+  }
+  $('demoBtn').addEventListener('click', startDemo);
+  $('demoBtn2').addEventListener('click', startDemo);
+
+  $('startForm').addEventListener('submit', async e => {
+    e.preventDefault(); $('startErr').textContent = ''; $('go').disabled = true;
+    try {
+      const r = await api('/api/sessions', { url: $('url').value.trim(), username: $('user').value, password: $('pass').value,
+        totp_secret: $('totp').value.trim(), task: $('task').value.trim(), extra_domains: $('extra').value.trim(), demo: demoOnly });
+      $('pass').value = ''; $('totp').value = '';
+      sid = r.id; startLive();
+    } catch (err) { $('startErr').textContent = err.message; }
+    finally { $('go').disabled = false; }
+  });
+
+  const feed = $('feed');
+  function add(cls, html, t) {
+    const d = document.createElement('div'); d.className = 'it ' + cls;
+    d.innerHTML = (t ? `<span class="tm">${t}</span>` : '') + html;
+    feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
+  }
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const firstLine = s => String(s || '').split('\n')[0];
+  const FIELD = { username: 'username', password: 'password', totp: 'one-time code' };
+  function stepText(e) {
+    const a = e.args || {}, tgt = a.target ? `“${esc(a.target)}”` : '';
+    switch (e.name) {
+      case 'navigate': return `Opened ${esc(a.url)}`;
+      case 'click': return `Clicked ${tgt || 'an element'}`;
+      case 'type_text': return `Typed “${esc(a.text)}” into ${tgt || 'a field'}`;
+      case 'fill_credential': return `Filled in your ${FIELD[a.field] || a.field}`;
+      case 'select_option': return `Chose “${esc(a.option)}”`;
+      case 'screenshot': return 'Looked at the screen';
+      case 'zoom': return `Zoomed in to read (${a.x},${a.y})`;
+      case 'click_at': return `Clicked at (${a.x},${a.y})` + (a.purpose ? `: ${esc(a.purpose)}` : '');
+      case 'drag': return `Dragged from (${a.from_x},${a.from_y}) to (${a.to_x},${a.to_y})`;
+      case 'scroll': return `Scrolled ${a.delta_y > 0 ? 'down' : 'up'}`;
+      case 'press_key': return `Pressed ${esc(a.key)}`;
+      case 'type_keys': return 'Typed into the page';
+      case 'wait': return `Waited ${a.seconds}s`;
+      default: return esc(e.name);
+    }
+  }
+  function setChip(status) {
+    const c = $('chip'); c.hidden = false;
+    c.textContent = status[0].toUpperCase() + status.slice(1);
+    c.className = 'chip ' + (status === 'working' || status === 'opening site' ? 'working' : status === 'ended' ? 'ended' : 'wait');
+  }
+
+  function startLive() {
+    show('liveView'); feed.innerHTML = ''; setControl(false); $('frame').hidden = true; $('frameWait').hidden = false;
+    $('stopBtn').hidden = false; $('newBtn').hidden = true; $('msg').disabled = $('sendBtn').disabled = false;
+    $('cost').hidden = false; $('cost').textContent = '$0.000';
+    es = new EventSource(`/api/sessions/${sid}/events?code=${encodeURIComponent(code)}`);
+    es.onmessage = m => handle(JSON.parse(m.data));
+    es.onerror = () => { if (es.readyState === 2) ended(); };
+  }
+  function ended() {
+    setChip('ended'); $('stopBtn').hidden = true; $('newBtn').hidden = false;
+    $('msg').disabled = $('sendBtn').disabled = true; $('approveCard').hidden = $('questionCard').hidden = true;
+    if (es) es.close();
+  }
+  function handle(e) {
+    switch (e.kind) {
+      case 'frame': if (e.id > 0) { const img = $('frame'); img.src = `/api/sessions/${sid}/frame?code=${encodeURIComponent(code)}&n=${e.id}`; img.hidden = false; $('frameWait').hidden = true; } break;
+      case 'status': setChip(e.status); if (e.cost !== undefined) $('cost').textContent = '$' + Number(e.cost).toFixed(3); if (e.status === 'ended') ended(); break;
+      case 'model': if (e.cost !== undefined) $('cost').textContent = '$' + Number(e.cost).toFixed(3); break;
+      case 'agent': add('agent', `<div class="bubble">${esc(e.text)}</div>`, e.t); break;
+      case 'user': add('you', `<div class="bubble">${esc(e.text)}</div>`, e.t); break;
+      case 'tool':
+        if (e.url) $('urlText').textContent = e.url;
+        if (e.name === 'download' || e.name === 'ask_human') break;
+        add('step' + (e.ok ? '' : ' bad'), e.ok ? stepText(e) : `${stepText(e)}: ${esc(firstLine(e.error))}`, e.t); break;
+      case 'download': {
+        const name = (e.file || '').split('/').pop();
+        add('step dl', e.duplicate ? `Already had ${esc(e.label)}, skipped` : `Saved ${esc(e.label)} · <a href="/api/sessions/${sid}/files/${encodeURIComponent(name)}?code=${encodeURIComponent(code)}">${esc(name)}</a>`, e.t); break; }
+      case 'approval': $('approveText').textContent = e.text; $('approveCard').hidden = false; $('allowBtn').focus(); break;
+      case 'approval_result': $('approveCard').hidden = true; add('step' + (e.allowed ? '' : ' bad'), e.allowed ? 'You allowed it' : 'You didn’t allow it', e.t); break;
+      case 'question': $('questionText').textContent = e.text; $('questionCard').hidden = false; $('answer').value = ''; $('answer').focus(); break;
+      case 'done': add('done', `<div class="bubble"><strong>${e.status === 'success' ? 'Done' : e.status === 'partial' ? 'Partly done' : 'Couldn’t finish'}.</strong> ${esc(e.text)}</div>`, e.t); break;
+      case 'error': add('error', `<div class="bubble">${esc(e.text)}</div>`, e.t); break;
+      case 'control': setControl(e.on); break;
+      case 'rule': add('step rule', esc(e.text), e.t); break;
+      case 'closed': ended(); break;
+    }
+  }
+  let inControl = false;
+  function setControl(on) {
+    inControl = on; $('ctlBar').hidden = !on;
+    $('ctlBtn').textContent = on ? 'Hand back to agent' : 'Take control';
+    $('ctlBtn').setAttribute('aria-pressed', String(on));
+  }
+  const VW = 1280, VH = 900;
+  function pagePoint(e) {
+    const r = $('frame').getBoundingClientRect();
+    return { x: Math.round((e.clientX - r.left) / r.width * VW), y: Math.round((e.clientY - r.top) / r.height * VH), px: e.clientX - r.left, py: e.clientY - r.top };
+  }
+  const send = ev => sid && api(`/api/sessions/${sid}/input`, ev).catch(err => add('error', `<div class="bubble">${esc(err.message)}</div>`));
+  $('frame').addEventListener('click', e => {
+    const p = pagePoint(e); const rp = $('ripple');
+    rp.style.left = p.px + 'px'; rp.style.top = p.py + 'px'; rp.classList.remove('on'); void rp.offsetWidth; rp.classList.add('on');
+    send({ type: 'click', x: p.x, y: p.y });
+  });
+  $('frame').addEventListener('wheel', e => {
+    if (!inControl) return;
+    e.preventDefault(); const p = pagePoint(e); send({ type: 'scroll', x: p.x, y: p.y, dy: Math.round(e.deltaY) });
+  }, { passive: false });
+  $('ctlBtn').addEventListener('click', () => sid && api(`/api/sessions/${sid}/control`, { on: !inControl }).catch(() => {}));
+  $('ctlBar').addEventListener('submit', e => { e.preventDefault(); const t = $('typeText').value; if (!t) return; $('typeText').value = ''; send({ type: 'type', text: t }); });
+  $('ctlBar').querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', () => send({ type: 'key', key: b.dataset.key })));
+  $('backBtn').addEventListener('click', () => send({ type: 'back' }));
+
+  // ---- rules editor ----
+  let rules = null;
+  const HELP = { 'instructions.md': 'Instructions (plain sentences the agent reads first)', 'settings.toml': 'Settings (approvals, limits, sites)' };
+  async function openRules(select) {
+    $('ruleErr').textContent = ''; $('ruleOk').textContent = '';
+    try { rules = await api('/api/rules'); } catch (err) { $('ruleErr').textContent = err.message; return; }
+    $('rulesFolder').textContent = rules.folder;
+    const opts = [['instructions.md', 'Instructions'], ['settings.toml', 'Settings'],
+      ...Object.keys(rules.sites).map(f => [f, 'Site note: ' + f.slice(6, -3)]), ['__new', '+ New site note…']];
+    $('ruleFile').innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+    $('ruleFile').value = select && opts.some(o => o[0] === select) ? select : 'instructions.md';
+    loadRule();
+    if (rules.problems.length) $('ruleErr').textContent = rules.problems.join(' ');
+    show('rulesView');
+  }
+  function loadRule() {
+    const f = $('ruleFile').value, isNew = f === '__new';
+    $('newSiteField').hidden = !isNew; $('ruleDelete').hidden = !f.startsWith('sites/');
+    $('ruleHelp').textContent = isNew ? 'Notes for this website' : (HELP[f] || 'Notes for ' + f.slice(6, -3));
+    $('ruleText').value = isNew ? '# Notes for this website\n\n- Where things are:\n- What the numbers and timers mean:\n- What to avoid:\n'
+      : f === 'instructions.md' ? rules.instructions : f === 'settings.toml' ? rules.settings : (rules.sites[f] || '');
+    $('ruleOk').textContent = '';
+  }
+  $('ruleFile').addEventListener('change', loadRule);
+  $('rulesBtn').addEventListener('click', () => openRules());
+  $('rulesBack').addEventListener('click', () => show(lastView));
+  $('ruleSave').addEventListener('click', async () => {
+    $('ruleErr').textContent = ''; $('ruleOk').textContent = '';
+    let file = $('ruleFile').value;
+    if (file === '__new') {
+      const d = $('newSite').value.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+      if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d)) { $('ruleErr').textContent = 'Enter a website domain like portal.example.com.'; return; }
+      file = `sites/${d}.md`;
+    }
+    try {
+      const r = await api('/api/rules', { file, text: $('ruleText').value }, 'PUT');
+      await openRules(file);
+      $('ruleOk').textContent = 'Saved. The next task uses it.';
+      if (r.problems.length) $('ruleErr').textContent = r.problems.join(' ');
+    } catch (err) { $('ruleErr').textContent = err.message; }
+  });
+  $('ruleDelete').addEventListener('click', async () => {
+    const f = $('ruleFile').value;
+    if (!$('ruleDelete').dataset.armed) { $('ruleDelete').dataset.armed = '1'; $('ruleDelete').textContent = 'Click again to delete'; return; }
+    delete $('ruleDelete').dataset.armed; $('ruleDelete').textContent = 'Delete this note';
+    try { await api('/api/rules?file=' + encodeURIComponent(f), {}, 'DELETE'); await openRules(); $('ruleOk').textContent = 'Deleted.'; }
+    catch (err) { $('ruleErr').textContent = err.message; }
+  });
+
+  $('allowBtn').addEventListener('click', () => api(`/api/sessions/${sid}/decide`, { allow: true }).catch(() => {}));
+  $('denyBtn').addEventListener('click', () => api(`/api/sessions/${sid}/decide`, { allow: false }).catch(() => {}));
+  $('questionCard').addEventListener('submit', e => {
+    e.preventDefault(); const v = $('answer').value.trim(); if (!v) return;
+    $('questionCard').hidden = true; add('you', `<div class="bubble">${esc(v.replace(/\d/g, '•'))}</div>`);
+    api(`/api/sessions/${sid}/answer`, { text: v }).catch(err => add('error', `<div class="bubble">${esc(err.message)}</div>`));
+  });
+  $('composer').addEventListener('submit', e => {
+    e.preventDefault(); const v = $('msg').value.trim(); if (!v) return; $('msg').value = '';
+    api(`/api/sessions/${sid}/message`, { text: v }).catch(err => add('error', `<div class="bubble">${esc(err.message)}</div>`));
+  });
+  $('msg').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('composer').requestSubmit(); } });
+  $('stopBtn').addEventListener('click', () => api(`/api/sessions/${sid}/stop`, {}).catch(() => {}));
+  $('newBtn').addEventListener('click', () => { sid = null; $('chip').hidden = true; $('cost').hidden = true; show('startView'); });
+  boot().catch(err => { show('startView'); $('startErr').textContent = err.message; });
+})();
+</script>
+</body>
+</html>

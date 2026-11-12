@@ -1,0 +1,12 @@
+# Copy to portals.toml and edit. One [[portal]] block per client account on a vendor portal.
+# {since} in instructions is replaced with the `since` date.
+
+[[portal]]
+id = "rivera-acme"
+client = "Rivera Bakery"
+name = "Acme Supplies"
+login_url = "https://portal.acme-supplies.example/login"
+allowed_domains = ["acme-supplies.example"]   # subdomains are included
+instructions = "Open Billing or Invoices and download every invoice and statement dated on or after {since}."
+since = "2026-10-01"
+max_steps = 40
