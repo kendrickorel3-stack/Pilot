@@ -161,9 +161,14 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
     rules_dir = data_dir / "rules"
     ensure_rules_folder(rules_dir)
 
+    def is_admin(request: Request) -> bool:
+        """Settings and rules can be changed from the computer running Pilot, or, on a hosted
+        server, by anyone holding the access code (check() has already verified it)."""
+        return (request.client.host if request.client else "") in LOCAL_HOSTS or bool(access_code)
+
     def local_only(request: Request) -> None:
-        if (request.client.host if request.client else "") not in LOCAL_HOSTS:
-            raise HTTPException(403, "Rules can only be edited from the computer running Pilot.")
+        if not is_admin(request):
+            raise HTTPException(403, "Rules can only be edited from the computer running Pilot, or on a server protected by an access code.")
 
     def rule_path(name: str) -> Path:
         if name in ("instructions.md", "settings.toml") or SITE_FILE.match(name):
@@ -190,7 +195,7 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
 
     @app.get("/api/config")
     def config(request: Request):
-        local = (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost", "testclient")
+        local = is_admin(request)
         prov = active_provider()
         return {"demo": demo_defaults, "demo_only": demo, "needs_code": bool(access_code), "has_key": has_key(),
                 "can_save_key": bool(env_file) and local and not demo, "provider": prov,
@@ -199,9 +204,8 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
     @app.post("/api/settings")
     def settings(body: KeyBody, request: Request):
         check(request)
-        host = request.client.host if request.client else ""
-        if not env_file or host not in ("127.0.0.1", "::1", "localhost", "testclient"):
-            raise HTTPException(403, "The API key can only be set from the computer running Pilot.")
+        if not env_file or not is_admin(request):
+            raise HTTPException(403, "The API key can only be set from the computer running Pilot, or on a server protected by an access code.")
         key, prov = body.api_key.strip(), body.provider
         if prov == "anthropic" and not key.startswith("sk-ant-"):
             raise HTTPException(400, "That doesn't look like an Anthropic API key. They start with sk-ant-.")

@@ -36,7 +36,11 @@ Click **Rules** in the top bar, or edit the files directly. The agent reads them
 If a file is missing or broken, Pilot uses safe defaults and tells you. A few protections are fixed in code: the AI never sees passwords or codes, logins are typed only on the session's own site, no getting past CAPTCHAs or bot checks, website text can't give orders, and every session has a cost cap.
 
 ## Hosting it online
-A `Dockerfile` is included. The server refuses to listen on a public address unless `INVOICE_AGENT_ACCESS_CODE` is set, because every session spends your AI credit.
+`Dockerfile` and `railway.json` are included (Railway, Render and Fly.io can all build the Dockerfile).
+1. Set `INVOICE_AGENT_ACCESS_CODE` on the host. The server refuses to run publicly without it, because every session spends your AI credit.
+2. Add a volume mounted at `/data` so keys, rules, downloads and reports survive redeploys.
+3. Open the site, enter the access code, then set the AI key and rules on the setup and Rules screens (allowed remotely only with the access code). Or set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` on the host.
+4. Give it at least 1 GB of memory; Chromium needs it.
 
 ## Batch mode (command line): what it does
 - Reads `portals.toml`: one entry per client account per vendor portal, with the task in plain English.
