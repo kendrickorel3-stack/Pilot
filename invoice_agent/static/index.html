@@ -70,6 +70,11 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
 .ailine button { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: 13px; }
 .stack { display: grid; gap: 16px; width: min(560px, 100%); }
 .row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.card.wide { width: min(820px, 100%); }
+.fixed { font-size: 13px; background: var(--surface-2); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; color: var(--muted); }
+#ruleText { min-height: 340px; font: 13px/1.5 var(--mono); }
+code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.it.step.rule { color: var(--warn); border-left-color: var(--warn); }
 .ok-note { color: var(--good); font-size: 14px; margin: 0 0 12px; }
 .err { color: var(--bad); font-size: 14px; margin: 8px 0 0; min-height: 1.2em; }
 
@@ -125,6 +130,7 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
 <header class="top">
   <div class="logo"><i></i>Pilot</div>
   <div class="spacer"></div>
+  <button class="btn small" id="rulesBtn" type="button" hidden>Rules</button>
   <span class="cost" id="cost" hidden></span>
   <span class="chip" id="chip" hidden>Starting</span>
 </header>
@@ -182,6 +188,20 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
   </div>
 </main>
 
+<main class="start" id="rulesView" hidden>
+  <div class="card wide">
+    <h1>Rules</h1>
+    <p class="lead">The agent reads these before every task. Changes apply to the next task you start. Files live in <code id="rulesFolder"></code>.</p>
+    <div class="fixed"><strong>Always on, can't be changed here:</strong> the AI never sees your passwords or codes; logins are typed only on the session's own site; it won't try to get past CAPTCHAs or bot checks; text on websites can't give it orders; every session has a cost cap (you choose the amount in Settings).</div>
+    <div class="field"><label for="ruleFile">File</label><select id="ruleFile"></select></div>
+    <div class="field" id="newSiteField" hidden><label for="newSite">Website domain for the new note</label><input id="newSite" placeholder="portal.example.com" autocomplete="off"></div>
+    <div class="field"><label for="ruleText" id="ruleHelp">Instructions</label><textarea id="ruleText" spellcheck="false"></textarea></div>
+    <div class="row-btns"><button class="btn primary" type="button" id="ruleSave">Save</button><button class="btn danger" type="button" id="ruleDelete" hidden>Delete this note</button><button class="btn" type="button" id="rulesBack">Back</button></div>
+    <p class="ok-note" id="ruleOk"></p>
+    <p class="err" id="ruleErr"></p>
+  </div>
+</main>
+
 <main class="live" id="liveView" hidden>
   <section class="pane" aria-label="Live browser">
     <div class="urlbar"><div class="dots"><b></b><b></b><b></b></div><div class="url" id="urlText">Opening…</div>
@@ -233,13 +253,14 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
   }
   try { code = sessionStorage.getItem('pilot-code') || ''; } catch (e) {}
 
-  async function api(path, body) {
-    const r = await fetch(path, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', 'x-access-code': code }, body: body === undefined ? undefined : JSON.stringify(body) });
+  async function api(path, body, method) {
+    const r = await fetch(path, { method: method || (body === undefined ? 'GET' : 'POST'), headers: { 'content-type': 'application/json', 'x-access-code': code }, body: body === undefined || method === 'DELETE' ? undefined : JSON.stringify(body) });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.detail || `Request failed (${r.status})`);
     return data;
   }
-  function show(view) { for (const v of ['codeView', 'startView', 'liveView']) $(v).hidden = v !== view; }
+  let lastView = 'startView';
+  function show(view) { for (const v of ['codeView', 'startView', 'liveView', 'rulesView']) $(v).hidden = v !== view; if (view !== 'rulesView') lastView = view; }
 
   async function boot() {
     const cfg = await api('/api/config');
@@ -255,6 +276,7 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
     $('model').innerHTML = cfg.openai_models.map(m => `<option value="${m}">${labels[m] || m}</option>`).join('');
     setAiLine(cfg.provider, cfg.model);
     $('keyCard').hidden = cfg.has_key || demoOnly || !canSave;
+    $('rulesBtn').hidden = !cfg.can_edit_rules;
     if (needsCode && !code) return show('codeView');
     if (needsCode) { try { await api('/api/check', {}); } catch { code = ''; return show('codeView'); } }
     show('startView');
@@ -370,6 +392,7 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
       case 'done': add('done', `<div class="bubble"><strong>${e.status === 'success' ? 'Done' : e.status === 'partial' ? 'Partly done' : 'Couldn’t finish'}.</strong> ${esc(e.text)}</div>`, e.t); break;
       case 'error': add('error', `<div class="bubble">${esc(e.text)}</div>`, e.t); break;
       case 'control': setControl(e.on); break;
+      case 'rule': add('step rule', esc(e.text), e.t); break;
       case 'closed': ended(); break;
     }
   }
@@ -398,6 +421,55 @@ details { margin: 4px 0 14px; } summary { cursor: pointer; color: var(--muted); 
   $('ctlBar').addEventListener('submit', e => { e.preventDefault(); const t = $('typeText').value; if (!t) return; $('typeText').value = ''; send({ type: 'type', text: t }); });
   $('ctlBar').querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', () => send({ type: 'key', key: b.dataset.key })));
   $('backBtn').addEventListener('click', () => send({ type: 'back' }));
+
+  // ---- rules editor ----
+  let rules = null;
+  const HELP = { 'instructions.md': 'Instructions (plain sentences the agent reads first)', 'settings.toml': 'Settings (approvals, limits, sites)' };
+  async function openRules(select) {
+    $('ruleErr').textContent = ''; $('ruleOk').textContent = '';
+    try { rules = await api('/api/rules'); } catch (err) { $('ruleErr').textContent = err.message; return; }
+    $('rulesFolder').textContent = rules.folder;
+    const opts = [['instructions.md', 'Instructions'], ['settings.toml', 'Settings'],
+      ...Object.keys(rules.sites).map(f => [f, 'Site note: ' + f.slice(6, -3)]), ['__new', '+ New site note…']];
+    $('ruleFile').innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+    $('ruleFile').value = select && opts.some(o => o[0] === select) ? select : 'instructions.md';
+    loadRule();
+    if (rules.problems.length) $('ruleErr').textContent = rules.problems.join(' ');
+    show('rulesView');
+  }
+  function loadRule() {
+    const f = $('ruleFile').value, isNew = f === '__new';
+    $('newSiteField').hidden = !isNew; $('ruleDelete').hidden = !f.startsWith('sites/');
+    $('ruleHelp').textContent = isNew ? 'Notes for this website' : (HELP[f] || 'Notes for ' + f.slice(6, -3));
+    $('ruleText').value = isNew ? '# Notes for this website\n\n- Where things are:\n- What the numbers and timers mean:\n- What to avoid:\n'
+      : f === 'instructions.md' ? rules.instructions : f === 'settings.toml' ? rules.settings : (rules.sites[f] || '');
+    $('ruleOk').textContent = '';
+  }
+  $('ruleFile').addEventListener('change', loadRule);
+  $('rulesBtn').addEventListener('click', () => openRules());
+  $('rulesBack').addEventListener('click', () => show(lastView));
+  $('ruleSave').addEventListener('click', async () => {
+    $('ruleErr').textContent = ''; $('ruleOk').textContent = '';
+    let file = $('ruleFile').value;
+    if (file === '__new') {
+      const d = $('newSite').value.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+      if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d)) { $('ruleErr').textContent = 'Enter a website domain like portal.example.com.'; return; }
+      file = `sites/${d}.md`;
+    }
+    try {
+      const r = await api('/api/rules', { file, text: $('ruleText').value }, 'PUT');
+      await openRules(file);
+      $('ruleOk').textContent = 'Saved. The next task uses it.';
+      if (r.problems.length) $('ruleErr').textContent = r.problems.join(' ');
+    } catch (err) { $('ruleErr').textContent = err.message; }
+  });
+  $('ruleDelete').addEventListener('click', async () => {
+    const f = $('ruleFile').value;
+    if (!$('ruleDelete').dataset.armed) { $('ruleDelete').dataset.armed = '1'; $('ruleDelete').textContent = 'Click again to delete'; return; }
+    delete $('ruleDelete').dataset.armed; $('ruleDelete').textContent = 'Delete this note';
+    try { await api('/api/rules?file=' + encodeURIComponent(f), {}, 'DELETE'); await openRules(); $('ruleOk').textContent = 'Deleted.'; }
+    catch (err) { $('ruleErr').textContent = err.message; }
+  });
 
   $('allowBtn').addEventListener('click', () => api(`/api/sessions/${sid}/decide`, { allow: true }).catch(() => {}));
   $('denyBtn').addEventListener('click', () => api(`/api/sessions/${sid}/decide`, { allow: false }).catch(() => {}));

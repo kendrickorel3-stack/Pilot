@@ -137,8 +137,13 @@ def host_allowed(url: str, allowed: list[str]) -> bool:
 class Browser:
     def __init__(self, allowed_domains: list[str], download_dir: Path, *, headless: bool = True,
                  executable_path: str | None = None, approve: Callable[[str], bool] | None = None,
-                 secret_values: list[str] | None = None):
-        self.allowed = allowed_domains
+                 secret_values: list[str] | None = None, policy=None):
+        from .policy import Policy
+        self.policy = policy or Policy()
+        self.allowed = list(allowed_domains) + [d for d in self.policy.also_allow if d not in allowed_domains]
+        self.blocked = self.policy.blocked_sites
+        self._ask_re, self._never_re = self.policy.ask_re, self.policy.never_re
+        self.gate_log: list[str] = []  # auto-approvals made by the rules, for the activity feed
         self.download_dir = download_dir
         self.headless = headless
         self.executable_path = executable_path
@@ -246,31 +251,49 @@ class Browser:
     def frame(self, quality: int = 60) -> bytes:
         return self.page.screenshot(type="jpeg", quality=quality)
 
+    def site_ok(self, url: str) -> bool:
+        if not host_allowed(url, self.allowed):
+            return False
+        return not (self.blocked and host_allowed(url, self.blocked))
+
+    def _gate(self, verb: str, what: str, purpose: str = "", where: str = "") -> None:
+        """One place for the approval rules: never_allow blocks, ask_before asks, auto-approved sites skip asking."""
+        text = f"{what} {purpose}".strip()
+        if self._never_re and self._never_re.search(text):
+            raise ActionError(f"Blocked by your rules (never_allow): \"{what or purpose}\". Do not try this again or another way.")
+        if not (self._ask_re and self._ask_re.search(text)):
+            return
+        if self.policy.auto_approve_sites and host_allowed(self.page.url, self.policy.auto_approve_sites):
+            self.gate_log.append(f"Auto-approved by your rules on this site: {verb} \"{what or purpose}\"")
+            return
+        msg = f"The agent wants to {verb} \"{what or purpose}\"{where} on {self.page.url}."
+        if purpose and purpose != what:
+            msg += f" Purpose: {purpose}."
+        if not self.approve(msg + " Allow it?"):
+            raise ActionError(f"Blocked: \"{what or purpose}\" needs your approval (it matches your ask_before rules) and wasn't approved. "
+                              "Do not try this again or another way.")
+
     def _guard_risky(self, loc, verb: str) -> None:
-        desc = self._describe(loc)
-        if RISKY.search(desc):
-            if not self.approve(f"The agent wants to {verb} \"{desc}\" on {self.page.url}. Allow it?"):
-                raise ActionError(f"Blocked: \"{desc}\" looks like it changes something (payment, order, deletion or submission). "
-                                  "This agent only reads and downloads. Do not try this control again.")
+        self._gate(verb, self._describe(loc))
 
     def _after_action(self) -> None:
         try:
             self.page.wait_for_load_state("domcontentloaded", timeout=8000)
         except PWTimeout:
             pass
-        if not host_allowed(self.page.url, self.allowed):
+        if not self.site_ok(self.page.url):
             bad = self.page.url
             try:
                 self.page.go_back(timeout=8000)
             except PWError:
                 pass
-            raise ActionError(f"Blocked: that led to {urlparse(bad).hostname}, which is outside this portal's allowed domains. Went back.")
+            raise ActionError(f"Blocked: that led to {urlparse(bad).hostname}, which is outside this session's allowed sites (or on your blocked list). Went back.")
 
     # ---- actions ----
     def navigate(self, url: str) -> None:
         url = urljoin(self.page.url if self.page.url.startswith("http") else "", url)
-        if not url.startswith(("http://", "https://")) or not host_allowed(url, self.allowed):
-            raise ActionError(f"Blocked: {url} is outside this portal's allowed domains ({', '.join(self.allowed)}).")
+        if not url.startswith(("http://", "https://")) or not self.site_ok(url):
+            raise ActionError(f"Blocked: {url} is outside this session's allowed sites (or on your blocked list) ({', '.join(self.allowed)}).")
         self.page.goto(url, wait_until="domcontentloaded")
         self._after_action()
 
@@ -279,8 +302,8 @@ class Browser:
         href = loc.get_attribute("href")
         if href and not href.startswith(("#", "javascript:")):
             target = urljoin(self.page.url, href)
-            if not host_allowed(target, self.allowed):
-                raise ActionError(f"Blocked: that link goes to {urlparse(target).hostname}, outside this portal's allowed domains.")
+            if not self.site_ok(target):
+                raise ActionError(f"Blocked: that link goes to {urlparse(target).hostname}, outside this session's allowed sites (or on your blocked list).")
         self._guard_risky(loc, "click")
         loc.click()
         self._after_action()
@@ -296,7 +319,7 @@ class Browser:
             self._after_action()
 
     def fill_secret(self, ref: str, value: str) -> None:
-        if not host_allowed(self.page.url, self.allowed):
+        if not self.site_ok(self.page.url):
             raise ActionError("Blocked: credentials are only typed on this portal's own domain.")
         loc = self._el(ref)
         if loc.evaluate("el => el.tagName.toLowerCase()") not in ("input", "textarea"):
@@ -328,8 +351,8 @@ class Browser:
             if not href:
                 raise ActionError("Clicking that did not start a download and it has no link to fetch.")
             url = urljoin(self.page.url, href)
-            if not host_allowed(url, self.allowed):
-                raise ActionError("Blocked: that file is hosted outside this portal's allowed domains.")
+            if not self.site_ok(url):
+                raise ActionError("Blocked: that file is hosted outside this session's allowed sites (or on your blocked list).")
             resp = self.context.request.get(url)
             ctype = resp.headers.get("content-type", "")
             if not resp.ok or "html" in ctype:
@@ -368,11 +391,7 @@ class Browser:
         desc = f"{hit.get('tag', '')} \"{hit.get('text', '')}\"".strip()
         if hit.get("type") == "password":
             raise ActionError("That's a password field; use fill_credential.")
-        if RISKY.search(hit.get("text", "")) or RISKY.search(purpose or ""):
-            what = hit.get("text") or purpose
-            if not self.approve(f"The agent wants to {verb} \"{what}\" at ({x},{y}) on {self.page.url}. Purpose: {purpose}. Allow it?"):
-                raise ActionError(f"Blocked: \"{what}\" looks like it pays, buys, orders, deletes or submits something. "
-                                  "Not allowed without approval. Do not try this again or another way.")
+        self._gate(verb, hit.get("text", ""), purpose or "", f" at ({x},{y})")
         return desc
 
     def click_at(self, x: int, y: int, purpose: str, double: bool = False) -> str:
@@ -406,9 +425,8 @@ class Browser:
             raise ActionError(f"Unsupported key {key!r}. Use one of: Enter, Tab, Escape, Backspace, Delete, Space, arrows, PageUp/PageDown, Home, End, KeyA-KeyZ, Digit0-Digit9.")
         if key == "Enter":
             active = self.page.evaluate("() => { const f = document.activeElement && document.activeElement.form; const b = f && f.querySelector('[type=submit],button'); return b ? (b.innerText || b.value || '') : ''; }")
-            if active and RISKY.search(active):
-                if not self.approve(f"The agent wants to press Enter, which submits \"{active}\" on {self.page.url}. Allow it?"):
-                    raise ActionError(f"Blocked: Enter would submit \"{active}\". Not allowed without approval.")
+            if active:
+                self._gate("press Enter, which submits", active)
         self.page.keyboard.press(" " if key == "Space" else key)
         self._after_action()
 

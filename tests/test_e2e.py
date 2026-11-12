@@ -133,7 +133,7 @@ def test_full_run(tmp_path, vault, provider):
         errors = [e["error"] for e in log if e["kind"] == "tool" and not e["ok"]]
         assert any("evil.example" in e for e in errors)                  # typed URL refused
         assert any("Pay now" in e for e in errors)                        # payment refused
-        assert sum("outside this portal" in e for e in errors) == 2       # both off-site attempts
+        assert sum("outside this session's allowed sites" in e for e in errors) == 2       # both off-site attempts
         assert any(e["kind"] == "download" and e["duplicate"] for e in log)
         assert (r.run_dir / "report.html").exists()
 

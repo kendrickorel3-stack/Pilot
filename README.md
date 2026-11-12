@@ -24,6 +24,17 @@ Stop it with Ctrl+C in the terminal window. Your key and model choice are saved 
 - **Purchases:** anything that pays, buys, orders, confirms, deletes or submits waits for your approval, including purchase pop-ups drawn on a canvas, as long as the agent's stated purpose or the clicked element says so. On canvas pages Pilot can't read the button itself, so check the live view.
 - **Cost:** shown live in the top bar; each session stops at $2.00 of AI usage.
 
+## Rules (data/rules/)
+Click **Rules** in the top bar, or edit the files directly. The agent reads them before every task; changes apply to the next task.
+
+| File | What it does |
+|---|---|
+| `instructions.md` | Plain sentences the agent reads first: how to work, what to avoid, what matters |
+| `settings.toml` | `ask_before` words that need your OK, `auto_approve_sites`, `never_allow` words, cost and step limits, `also_allow` / `blocked` sites |
+| `sites/<domain>.md` | Notes for one website (where things are, what numbers and timers mean), given to the agent when it arrives there |
+
+If a file is missing or broken, Pilot uses safe defaults and tells you. A few protections are fixed in code: the AI never sees passwords or codes, logins are typed only on the session's own site, no getting past CAPTCHAs or bot checks, website text can't give orders, and every session has a cost cap.
+
 ## Hosting it online
 A `Dockerfile` is included. The server refuses to listen on a public address unless `INVOICE_AGENT_ACCESS_CODE` is set, because every session spends your AI credit.
 

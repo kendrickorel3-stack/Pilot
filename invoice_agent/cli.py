@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--show-browser", action="store_true", help="Show the browser window")
     run.add_argument("--unattended", action="store_true", help="Never ask questions; block risky clicks automatically")
     run.add_argument("--max-cost", type=float, default=1.50, help="Model cost cap per portal in USD")
+    run.add_argument("--rules", default="rules", help="Rules folder (instructions.md, settings.toml, sites/)")
     run.add_argument("--chromium", default=os.environ.get("INVOICE_AGENT_CHROMIUM"), help="Path to a Chromium binary")
 
     a = ap.parse_args(argv)
@@ -56,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         from .agent import run_portal  # imported late so vault commands work without the browser stack
+        from .policy import load_policy
 
         portals = load_portals(a.portals)
         if a.portal:
@@ -69,8 +71,11 @@ def main(argv: list[str] | None = None) -> int:
         failures = 0
         for p in portals:
             print(f"\n=== {p.client} / {p.name} ===")
+            pol = load_policy(a.rules, create=True)
+            for problem in pol.problems:
+                print(f"Rules: {problem}")
             r = run_portal(p, v, out_dir=Path(a.out), runs_dir=Path(a.runs), ask_human=ask, approve=approve,
-                           headless=not a.show_browser, executable_path=a.chromium, max_cost_usd=a.max_cost)
+                           headless=not a.show_browser, executable_path=a.chromium, max_cost_usd=a.max_cost, policy=pol)
             print(f"{r.status.upper()}: {r.summary}")
             print(f"{len(r.downloads)} new file(s), {r.steps} steps, ${r.cost_usd:.3f}. Report: {r.run_dir / 'report.html'}")
             failures += r.status != "success"

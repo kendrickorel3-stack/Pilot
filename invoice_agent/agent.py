@@ -12,10 +12,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Callable
 
 from .browser import ActionError, Browser
 from .config import Portal
+from .policy import Policy
 from .llm import BrainBusy, BrainError, make_brain
 from .report import write_report
 from .vault import Vault, VaultError
@@ -120,8 +122,10 @@ def run_portal(portal: Portal, vault: Vault, *, out_dir: Path, runs_dir: Path,
                client=None, provider: str | None = None, model: str | None = None,
                ask_human: Callable[[str], str] | None = None,
                approve: Callable[[str], bool] | None = None, headless: bool = True,
-               executable_path: str | None = None, max_cost_usd: float = 1.50,
-               effort: str = "medium") -> RunResult:
+               executable_path: str | None = None, max_cost_usd: float | None = None,
+               effort: str = "medium", policy: Policy | None = None) -> RunResult:
+    policy = policy or Policy()
+    max_cost_usd = policy.max_cost_usd if max_cost_usd is None else max_cost_usd
     if client is not None and provider is None:
         provider = "anthropic"
     brain = make_brain(provider, model, client, effort)
@@ -133,10 +137,13 @@ def run_portal(portal: Portal, vault: Vault, *, out_dir: Path, runs_dir: Path,
     result = RunResult(portal.id, "failed", "Did not finish.", run_dir=run_dir)
     log.event("start", portal=portal.id, client=portal.client, task=portal.task(), model=brain.model)
 
+    for problem in policy.problems:
+        log.event("rule", text=problem)
     with Browser(portal.allowed_domains, dl_dir, headless=headless, executable_path=executable_path,
-                 approve=approve, secret_values=vault.all_secret_values()) as br:
+                 approve=approve, secret_values=vault.all_secret_values(), policy=policy) as br:
         br.navigate(portal.login_url)
-        brain.start(SYSTEM, TOOLS, [
+        brain.start(SYSTEM + "\n\n" + policy.system_text(), TOOLS, [
+            *site_notes_for(br),
             f"Client: {portal.client}\nPortal: {portal.name}\nTask: {portal.task()}\n"
             f"Stored credentials available: {', '.join(vault.fields(portal.id)) or 'none'}",
             br.snapshot()])
@@ -188,8 +195,34 @@ def run_portal(portal: Portal, vault: Vault, *, out_dir: Path, runs_dir: Path,
     return result
 
 
+def site_notes_for(br: Browser) -> list[str]:
+    """Notes from rules/sites/ for the site the browser is on, given once per site per run."""
+    host = (urlparse(br.page.url).hostname or "").lower()
+    found = br.policy.site_notes(host)
+    seen = br.__dict__.setdefault("_notes_seen", set())
+    if not found or found[0] in seen:
+        return []
+    seen.add(found[0])
+    return [f"Notes for {found[0]} from the person's rules folder (trusted; written by them):\n{found[1]}"]
+
+
 def _execute(call, br: Browser, vault: Vault, portal: Portal, ask_human, log: RunLog, run_dir: Path, step: int,
              result: RunResult):
+    """Run one tool call, then attach any new site notes and record auto-approvals made by the rules."""
+    content, is_error, done = _execute_one(call, br, vault, portal, ask_human, log, run_dir, step, result)
+    while br.gate_log:
+        log.event("rule", text=br.gate_log.pop(0))
+    notes = [] if done else site_notes_for(br)
+    if notes:
+        if isinstance(content, list):
+            content = [{"type": "text", "text": n} for n in notes] + content
+        else:
+            content = "\n\n".join(notes + [content])
+    return content, is_error, done
+
+
+def _execute_one(call, br: Browser, vault: Vault, portal: Portal, ask_human, log: RunLog, run_dir: Path, step: int,
+                 result: RunResult):
     """Run one tool call. Returns (content for the model, is_error, finished)."""
     name, args = call.name, call.input if isinstance(call.input, dict) else {}
     shot = run_dir / "shots" / f"{step:03d}-{call.id[-6:]}.png"

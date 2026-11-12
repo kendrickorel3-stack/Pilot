@@ -13,7 +13,9 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import time
+import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .policy import ensure_rules_folder, load_policy
 from .llm import DEFAULT_MODEL, OPENAI_MODELS, active_model, active_provider
 from .session import AgentSession
 
@@ -64,6 +67,15 @@ class InputBody(BaseModel):
 
 class ControlBody(BaseModel):
     on: bool
+
+
+class RuleFileBody(BaseModel):
+    file: str = Field(max_length=200)
+    text: str = Field(default="", max_length=50000)
+
+
+SITE_FILE = re.compile(r"^sites/([a-z0-9-]+(\.[a-z0-9-]+)+)\.md$")
+LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost", "testclient")
 
 
 def load_env_file(path: Path) -> None:
@@ -146,6 +158,18 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
         if not hmac.compare_digest(given.encode(), access_code.encode()):
             raise HTTPException(401, "Access code required.")
 
+    rules_dir = data_dir / "rules"
+    ensure_rules_folder(rules_dir)
+
+    def local_only(request: Request) -> None:
+        if (request.client.host if request.client else "") not in LOCAL_HOSTS:
+            raise HTTPException(403, "Rules can only be edited from the computer running Pilot.")
+
+    def rule_path(name: str) -> Path:
+        if name in ("instructions.md", "settings.toml") or SITE_FILE.match(name):
+            return rules_dir / name
+        raise HTTPException(400, "Site notes must be named sites/<domain>.md, for example sites/acme.com.md.")
+
     def get(sid: str) -> AgentSession:
         s = sessions.get(sid)
         if not s:
@@ -170,7 +194,7 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
         prov = active_provider()
         return {"demo": demo_defaults, "demo_only": demo, "needs_code": bool(access_code), "has_key": has_key(),
                 "can_save_key": bool(env_file) and local and not demo, "provider": prov,
-                "model": active_model(prov) if prov else None, "openai_models": OPENAI_MODELS}
+                "model": active_model(prov) if prov else None, "openai_models": OPENAI_MODELS, "can_edit_rules": local}
 
     @app.post("/api/settings")
     def settings(body: KeyBody, request: Request):
@@ -216,7 +240,7 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
         try:
             s = AgentSession(url=body.url, username=body.username, password=body.password, totp_secret=body.totp_secret,
                              task=body.task, extra_domains=[d for d in body.extra_domains.replace(",", " ").split() if d],
-                             client=client, runs_dir=data_dir / "runs", out_dir=data_dir / "out",
+                             client=client, runs_dir=data_dir / "runs", out_dir=data_dir / "out", policy=load_policy(rules_dir),
                              executable_path=executable_path)
         except ValueError as e:
             raise HTTPException(400, str(e))
@@ -286,6 +310,41 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
     def control(sid: str, body: ControlBody, request: Request):
         check(request)
         get(sid).set_control(body.on)
+        return {"ok": True}
+
+    @app.get("/api/rules")
+    def rules_get(request: Request):
+        check(request)
+        local_only(request)
+        pol = load_policy(rules_dir)
+        sites = {f"sites/{f.name}": f.read_text(errors="replace") for f in sorted((rules_dir / "sites").glob("*.md"))}
+        read = lambda n: (rules_dir / n).read_text(errors="replace") if (rules_dir / n).exists() else ""
+        return {"folder": str(rules_dir.resolve()), "instructions": read("instructions.md"), "settings": read("settings.toml"),
+                "sites": sites, "problems": pol.problems}
+
+    @app.put("/api/rules")
+    def rules_put(body: RuleFileBody, request: Request):
+        check(request)
+        local_only(request)
+        path = rule_path(body.file)
+        if body.file == "settings.toml":
+            try:
+                tomllib.loads(body.text)
+            except tomllib.TOMLDecodeError as e:
+                raise HTTPException(400, f"Not saved: settings.toml has an error: {e}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body.text)
+        return {"ok": True, "problems": load_policy(rules_dir).problems}
+
+    @app.delete("/api/rules")
+    def rules_delete(file: str, request: Request):
+        check(request)
+        local_only(request)
+        if not SITE_FILE.match(file):
+            raise HTTPException(400, "Only site notes can be deleted. Empty the other files instead.")
+        path = rule_path(file)
+        if path.exists():
+            path.unlink()
         return {"ok": True}
 
     @app.post("/api/sessions/{sid}/stop")
