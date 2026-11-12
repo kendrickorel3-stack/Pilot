@@ -119,6 +119,12 @@ class AnthropicBrain(Brain):
 
 # ---------------------------------------------------------------- OpenAI
 class OpenAIBrain(Brain):
+    """OpenAI Responses API. (Chat completions refuses function tools together with reasoning on
+    newer models, so Responses is required for an agent that reasons and uses tools.)
+
+    Nothing is stored at OpenAI (store=False): each request carries the conversation, including the
+    model's encrypted reasoning items, which keeps reasoning intact across tool calls."""
+
     def __init__(self, client=None, model: str = DEFAULT_MODEL["openai"], effort: str = "medium"):
         super().__init__(model=model)
         import openai
@@ -126,46 +132,49 @@ class OpenAIBrain(Brain):
         self.client = client or openai.OpenAI()
         self.effort = effort
         self._send_effort = True
-        self.messages: list[dict] = []
+        self.items: list[dict] = []
 
     def start(self, system, tools, user_texts):
-        self.tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
-                                                        "parameters": t["input_schema"], "strict": True}} for t in tools]
-        self.messages = [{"role": "system", "content": system},
-                         {"role": "user", "content": "\n\n".join(user_texts)}]
+        self.instructions = system
+        self.tools = [{"type": "function", "name": t["name"], "description": t["description"],
+                       "parameters": t["input_schema"], "strict": True} for t in tools]
+        self.items = [_user([{"type": "input_text", "text": t} for t in user_texts])]
 
     def add_results(self, results, extra_texts=None):
         images = []
         for cid, content, is_error in results:
-            if isinstance(content, list):  # tool messages are text-only, so images follow in a user message
+            if isinstance(content, list):  # function outputs are text; screenshots follow as a user message
                 imgs = [b for b in content if b.get("type") == "image"]
                 images += imgs
                 text = "\n\n".join(b["text"] for b in content if b.get("type") == "text")
                 if imgs:
                     text += ("\n\n" if text else "") + f"[Screenshot {len(images)} is attached in the next message.]"
             else:
-                text = ("ERROR: " if is_error else "") + str(content)
-            self.messages.append({"role": "tool", "tool_call_id": cid, "content": text})
-        parts = [{"type": "image_url", "image_url": {"url": f"data:{b['source']['media_type']};base64,{b['source']['data']}"}}
-                 for b in images]
-        parts += [{"type": "text", "text": t} for t in (extra_texts or [])]
+                text = str(content)
+            if is_error:
+                text = "ERROR: " + text
+            self.items.append({"type": "function_call_output", "call_id": cid, "output": text})
+        parts = [{"type": "input_image", "detail": "auto",
+                  "image_url": f"data:{b['source']['media_type']};base64,{b['source']['data']}"} for b in images]
+        parts += [{"type": "input_text", "text": t} for t in (extra_texts or [])]
         if parts:
-            self.messages.append({"role": "user", "content": parts})
+            self.items.append(_user(parts))
 
     def add_user_text(self, text):
-        self.messages.append({"role": "user", "content": text})
+        self.items.append(_user([{"type": "input_text", "text": text}]))
 
     def next(self) -> Turn:
         o = self._sdk
-        kw = dict(model=self.model, messages=self.messages, tools=self.tools, tool_choice="auto",
-                  parallel_tool_calls=True, prompt_cache_key="pilot-agent")
+        kw = dict(model=self.model, instructions=self.instructions, input=self.items, tools=self.tools,
+                  tool_choice="auto", parallel_tool_calls=True, store=False,
+                  include=["reasoning.encrypted_content"], prompt_cache_key="pilot-agent")
         if self._send_effort:
-            kw["reasoning_effort"] = self.effort
+            kw["reasoning"] = {"effort": self.effort}
         try:
-            resp = self.client.chat.completions.create(**kw)
+            resp = self.client.responses.create(**kw)
         except o.BadRequestError as e:
             if self._send_effort and "reasoning" in str(e).lower():
-                self._send_effort = False  # this model doesn't take reasoning_effort; retry without it
+                self._send_effort = False  # model without reasoning settings: retry plainly
                 return self.next()
             raise BrainError(f"AI service error {e.status_code}: {e.message}") from e
         except o.RateLimitError as e:
@@ -174,34 +183,41 @@ class OpenAIBrain(Brain):
             raise BrainError(f"AI service error {e.status_code}: {e.message}") from e
         except o.APIConnectionError as e:
             raise BrainError("Could not reach the AI service.") from e
+        if getattr(resp, "error", None):
+            raise BrainError(f"AI service error: {resp.error.message}")
         u = resp.usage
         if u:
-            cached = (u.prompt_tokens_details.cached_tokens if u.prompt_tokens_details else 0) or 0
-            self.tokens["input"] += (u.prompt_tokens or 0) - cached
+            cached = (u.input_tokens_details.cached_tokens if u.input_tokens_details else 0) or 0
+            self.tokens["input"] += (u.input_tokens or 0) - cached
             self.tokens["cached"] += cached
-            self.tokens["output"] += u.completion_tokens or 0
-        choice = resp.choices[0]
-        msg = choice.message
-        calls = []
-        for tc in msg.tool_calls or []:
-            if getattr(tc, "type", "function") != "function":
-                continue
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            calls.append(Call(tc.id, tc.function.name, args if isinstance(args, dict) else {}))
-        entry = {"role": "assistant", "content": msg.content}
-        if msg.tool_calls:
-            entry["tool_calls"] = [{"id": tc.id, "type": "function",
-                                    "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                                   for tc in msg.tool_calls if getattr(tc, "type", "function") == "function"]
-        self.messages.append(entry)
-        notes = [msg.content.strip()] if msg.content and msg.content.strip() else []
-        if getattr(msg, "refusal", None) or choice.finish_reason == "content_filter":
-            return Turn(notes or [msg.refusal or ""], [], "refusal")
-        stop = "truncated" if choice.finish_reason == "length" else ("tool_use" if calls else "end")
-        return Turn(notes, calls, stop)
+            self.tokens["output"] += u.output_tokens or 0
+        notes, calls, refused = [], [], False
+        for item in resp.output:
+            # feed every output item back next turn (reasoning, messages, calls), as the API expects
+            self.items.append(item.model_dump(exclude_none=True, by_alias=True))
+            if item.type == "function_call":
+                try:
+                    args = json.loads(item.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                calls.append(Call(item.call_id, item.name, args if isinstance(args, dict) else {}))
+            elif item.type == "message":
+                for c in item.content or []:
+                    if c.type == "output_text" and c.text.strip():
+                        notes.append(c.text.strip())
+                    elif c.type == "refusal":
+                        refused = True
+                        notes.append(c.refusal)
+        reason = resp.incomplete_details.reason if resp.status == "incomplete" and resp.incomplete_details else None
+        if refused or reason == "content_filter":
+            return Turn(notes, [], "refusal")
+        if reason == "max_output_tokens" and not calls:
+            return Turn(notes, [], "truncated")
+        return Turn(notes, calls, "tool_use" if calls else "end")
+
+
+def _user(content: list[dict]) -> dict:
+    return {"type": "message", "role": "user", "content": content}
 
 
 # ---------------------------------------------------------------- selection

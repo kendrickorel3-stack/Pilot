@@ -72,32 +72,35 @@ class ScriptedClient:
 
 
 class ScriptedOpenAI(ScriptedClient):
-    """Same plan, shaped like client.chat.completions.create responses."""
+    """Same plan, shaped like client.responses.create (OpenAI Responses API) results."""
 
     def __init__(self, base_url: str):
         super().__init__(base_url)
-        self.chat = self
-        self.completions = self
+        self.responses = self
 
     def create(self, **kw):
-        from openai.types.chat import ChatCompletion
-        self.calls.append(kw)
+        from openai.types.responses import Response
+        self.calls.append({**kw, "messages": kw["input"]})
         snap = ""
-        for m in reversed(kw["messages"]):
-            if m["role"] in ("tool", "user"):
-                c = m["content"]
-                snap = c if isinstance(c, str) else "\n".join(x.get("text", "") for x in c)
+        for item in reversed(kw["input"]):
+            if item.get("type") == "function_call_output":
+                snap = item["output"]
+                break
+            if item.get("role") == "user":
+                snap = "\n".join(c.get("text", "") for c in item["content"])
                 break
         i = len(self.calls) - 1
         name, args = self.plan[i](snap)
-        return ChatCompletion.model_validate({
-            "id": f"chatcmpl-{i}", "object": "chat.completion", "created": 0, "model": kw["model"],
-            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
-                "role": "assistant", "content": None,
-                "tool_calls": [{"id": f"call_{i:04d}", "type": "function",
-                                "function": {"name": name, "arguments": json.dumps(args)}}]}}],
-            "usage": {"prompt_tokens": 3000, "completion_tokens": 120, "total_tokens": 3120,
-                      "prompt_tokens_details": {"cached_tokens": 2500}},
+        return Response.model_validate({
+            "id": f"resp_{i}", "object": "response", "created_at": 0, "model": kw["model"],
+            "parallel_tool_calls": True, "tool_choice": "auto", "tools": [], "status": "completed",
+            "output": [
+                {"type": "reasoning", "id": f"rs_{i}", "summary": [], "encrypted_content": "opaque"},
+                {"type": "function_call", "id": f"fc_{i}", "call_id": f"call_{i:04d}", "name": name,
+                 "arguments": json.dumps(args), "status": "completed"}],
+            "usage": {"input_tokens": 3000, "output_tokens": 120, "total_tokens": 3120,
+                      "input_tokens_details": {"cached_tokens": 2500, "cache_write_tokens": 0},
+                      "output_tokens_details": {"reasoning_tokens": 40}},
         })
 
 
@@ -144,12 +147,14 @@ def test_full_run(tmp_path, vault, provider):
         assert all(c["model"] == expected for c in fake.calls)
         if provider == "openai":
             first = fake.calls[0]
-            assert first["tools"][0]["type"] == "function" and first["tools"][0]["function"]["strict"] is True
-            last = fake.calls[-1]["messages"]
-            # every tool call is answered by a tool message with the same id, in order
-            asked = [tc["id"] for m in last if m["role"] == "assistant" for tc in m.get("tool_calls", [])]
-            answered = [m["tool_call_id"] for m in last if m["role"] == "tool"]
-            assert asked == answered and len(asked) == 13
+            assert first["tools"][0] == {**first["tools"][0], "type": "function", "strict": True}
+            assert first["reasoning"] == {"effort": "medium"} and first["store"] is False
+            assert "reasoning.encrypted_content" in first["include"]
+            items = fake.calls[-1]["input"]
+            asked = [it["call_id"] for it in items if it.get("type") == "function_call"]
+            answered = [it["call_id"] for it in items if it.get("type") == "function_call_output"]
+            assert asked == answered and len(asked) == 13            # every call answered, in order
+            assert sum(it.get("type") == "reasoning" for it in items) == 13   # reasoning carried forward
             assert r.cost_usd > 0
 
 
