@@ -152,6 +152,7 @@ class Browser:
         self.approve = approve or (lambda _msg: False)
         self.secret_values = [s for s in (secret_values or []) if len(s) >= 4]
         self.on_tick: Callable[[], None] | None = None  # called during waits, e.g. to refresh a live view
+        self.database = None  # set when the person connected a database to the session
         self._pw = self._browser = self.context = self.page = None
         self.manifest_path = download_dir / "manifest.json"
         self.manifest = json.loads(self.manifest_path.read_text()) if self.manifest_path.exists() else {}

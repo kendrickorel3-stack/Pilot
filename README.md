@@ -25,6 +25,7 @@ Stop it with Ctrl+C in the terminal window. Your key and model choice are saved 
 - **Cost:** shown live in the top bar; each session stops at $2.00 of AI usage.
 - **Web search:** the agent can search the web for information while it works, run on the AI provider's own servers (no scraping). Turn it off in Rules → Settings → `[web] search = false` to save cost. If a model or account can't use it, Pilot drops it and the task continues.
 - **Memory:** the agent can save short durable notes (where things are on a site, a preference) to `data/rules/memory.md`; they're shown to it at the start of later sessions. Edit or delete them in the file or on disk.
+- **Database (optional):** paste a connection string for a database **you own** (SQLite, PostgreSQL or MySQL) in the start form under *More options*. The agent can then read it (`db_query`), see its structure (`db_tables`), and change it (`db_execute`) — and every change asks for your approval first. The connection string is held in the session only, never shown to the AI, and redacted from everything it sees. Reads run in a read-only transaction; stacked/injection statements are refused. Pilot only ever connects with credentials you give it; it will not reach a database it was not given access to.
 - **Forms:** it fills whole forms, not just logins — fields, dropdowns and checkboxes — with the final submit held for your approval when the rules call for it.
 
 

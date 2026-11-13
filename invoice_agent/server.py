@@ -39,6 +39,7 @@ class StartBody(BaseModel):
     totp_secret: str = Field(default="", max_length=200)
     task: str = Field(default="", max_length=4000)
     extra_domains: str = Field(default="", max_length=1000)
+    database: str = Field(default="", max_length=600)
     demo: bool = False
 
 
@@ -238,14 +239,14 @@ def create_app(*, demo: bool = False, access_code: str = "", executable_path: st
         if demo or body.demo:
             from .demo import DemoClient
             client = DemoClient()
-            body = body.model_copy(update=demo_defaults)  # the demo only ever runs against the built-in portal
+            body = body.model_copy(update={**demo_defaults, "database": ""})  # the demo only ever runs against the built-in portal
         elif not has_key():
             raise HTTPException(503, "Add your OpenAI or Anthropic API key first, or try the demo.")
         try:
             s = AgentSession(url=body.url, username=body.username, password=body.password, totp_secret=body.totp_secret,
                              task=body.task, extra_domains=[d for d in body.extra_domains.replace(",", " ").split() if d],
                              client=client, runs_dir=data_dir / "runs", out_dir=data_dir / "out", policy=load_policy(rules_dir),
-                             executable_path=executable_path)
+                             executable_path=executable_path, db_url=body.database.strip())
         except ValueError as e:
             raise HTTPException(400, str(e))
         sessions[s.id] = s

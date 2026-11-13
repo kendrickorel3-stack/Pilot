@@ -180,6 +180,8 @@ code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
         <small>Lets the agent make its own 6-digit codes. Without it, it will ask you for the code.</small></div>
       <div class="field"><label for="extra">Other sites it may use (optional)</label><input id="extra" placeholder="login.microsoftonline.com">
         <small>For sign-in pages hosted elsewhere. It can't leave the website's own domain otherwise.</small></div>
+      <div class="field"><label for="db">Database connection (optional)</label><input id="db" type="password" autocomplete="off" placeholder="postgres://user:pass@host:5432/dbname">
+        <small>Only a database you own. The agent can read it and ask you before any change. Your connection string is never shown to the AI. SQLite, PostgreSQL and MySQL.</small></div>
     </details>
     <p class="note">Your login is kept in the server's memory for this session only, is typed into the site by the server, and is never shown to the AI. Payments, orders, deletions and submissions wait for you to approve. Only use accounts you own, on sites that allow automated access.</p>
     <div class="row-btns"><button class="btn primary" type="submit" id="go">Start</button><button class="btn" type="button" id="demoBtn">Watch a demo</button></div>
@@ -318,8 +320,9 @@ code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
     e.preventDefault(); $('startErr').textContent = ''; $('go').disabled = true;
     try {
       const r = await api('/api/sessions', { url: $('url').value.trim(), username: $('user').value, password: $('pass').value,
-        totp_secret: $('totp').value.trim(), task: $('task').value.trim(), extra_domains: $('extra').value.trim(), demo: demoOnly });
-      $('pass').value = ''; $('totp').value = '';
+        totp_secret: $('totp').value.trim(), task: $('task').value.trim(), extra_domains: $('extra').value.trim(),
+        database: $('db').value.trim(), demo: demoOnly });
+      $('pass').value = ''; $('totp').value = ''; $('db').value = '';
       sid = r.id; startLive();
     } catch (err) { $('startErr').textContent = err.message; }
     finally { $('go').disabled = false; }
@@ -351,6 +354,9 @@ code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
       case 'type_keys': return 'Typed into the page';
       case 'wait': return `Waited ${a.seconds}s`;
       case 'remember': return `Saved a note to memory`;
+      case 'db_tables': return 'Looked at the database structure';
+      case 'db_query': return 'Queried the database';
+      case 'db_execute': return 'Changed the database';
       default: return esc(e.name);
     }
   }

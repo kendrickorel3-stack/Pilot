@@ -17,6 +17,7 @@ from typing import Callable
 
 from .browser import ActionError, Browser
 from .config import Portal
+from .database import Database, DatabaseError
 from .policy import Policy
 from .llm import BrainBusy, BrainError, make_brain
 from .report import write_report
@@ -93,6 +94,16 @@ TOOLS = [
                                        "summary": {"type": "string"}}, ["status", "summary"]),
 ]
 
+# Added to the tool list only when the person connected a database to the session.
+DB_TOOLS = [
+    _tool("db_tables", "List the tables and their columns in the connected database.", {}, []),
+    _tool("db_query", "Run one read-only SQL query (SELECT / WITH ... SELECT) on the connected database and get rows "
+          "back. Writes are refused here. Use LIMIT for big tables.", {"sql": {"type": "string"}}, ["sql"]),
+    _tool("db_execute", "Run one statement that changes the database (INSERT, UPDATE, DELETE, or schema). The person is "
+          "asked to approve it before it runs.", {"sql": {"type": "string"}}, ["sql"]),
+]
+DB_TOOL_NAMES = {t["name"] for t in DB_TOOLS}
+
 
 @dataclass
 class RunResult:
@@ -128,9 +139,12 @@ def run_portal(portal: Portal, vault: Vault, *, out_dir: Path, runs_dir: Path,
                ask_human: Callable[[str], str] | None = None,
                approve: Callable[[str], bool] | None = None, headless: bool = True,
                executable_path: str | None = None, max_cost_usd: float | None = None,
-               effort: str = "medium", policy: Policy | None = None) -> RunResult:
+               effort: str = "medium", policy: Policy | None = None, db_url: str | None = None) -> RunResult:
     policy = policy or Policy()
     max_cost_usd = policy.max_cost_usd if max_cost_usd is None else max_cost_usd
+    database = Database(db_url).connect() if db_url else None
+    tools = TOOLS + DB_TOOLS if database else TOOLS
+    db_secrets = database.secret_values() if database else []
     if client is not None and provider is None:
         provider = "anthropic"
     brain = make_brain(provider, model, client, effort, web_search=policy.web_search)
@@ -145,9 +159,10 @@ def run_portal(portal: Portal, vault: Vault, *, out_dir: Path, runs_dir: Path,
     for problem in policy.problems:
         log.event("rule", text=problem)
     with Browser(portal.allowed_domains, dl_dir, headless=headless, executable_path=executable_path,
-                 approve=approve, secret_values=vault.all_secret_values(), policy=policy) as br:
+                 approve=approve, secret_values=vault.all_secret_values() + db_secrets, policy=policy) as br:
+        br.database = database
         br.navigate(portal.login_url)
-        brain.start(SYSTEM + "\n\n" + policy.system_text(), TOOLS, [
+        brain.start(SYSTEM + "\n\n" + policy.system_text() + _db_hint(database), tools, [
             *site_notes_for(br),
             f"Client: {portal.client}\nPortal: {portal.name}\nTask: {portal.task()}\n"
             f"Stored credentials available: {', '.join(vault.fields(portal.id)) or 'none'}",
@@ -194,10 +209,20 @@ def run_portal(portal: Portal, vault: Vault, *, out_dir: Path, runs_dir: Path,
 
         log.event("end", status=result.status, summary=result.summary, cost=round(brain.usd, 4), steps=result.steps,
                   downloads=result.downloads)
+    if database:
+        database.close()
     result.cost_usd = round(brain.usd, 4)
     log.close()
     write_report(run_dir, portal, result, log.events, brain.tokens)
     return result
+
+
+def _db_hint(database) -> str:
+    if not database:
+        return ""
+    return ("\n\nA database is connected (" + database.label() + "). Use db_tables to see its structure, db_query to "
+            "read it, and db_execute (which asks the person) to change it. You only have the access the person gave you; "
+            "do not try to reach any other database.")
 
 
 def site_notes_for(br: Browser) -> list[str]:
@@ -299,6 +324,20 @@ def _execute_one(call, br: Browser, vault: Vault, portal: Portal, ask_human, log
             answer = ask_human(args["question"])
             log.event("human", question=args["question"], answered=bool(answer))
             return f"The bookkeeper answered: {answer}\n\n{br.snapshot()}", False, False
+        elif name in DB_TOOL_NAMES:
+            if not getattr(br, "database", None):
+                raise ActionError("No database is connected to this session.")
+            try:
+                if name == "db_tables":
+                    out = br.database.schema()
+                elif name == "db_query":
+                    out = br.database.query(args["sql"]).as_text()
+                else:
+                    out = br.database.execute(args["sql"], br.approve).as_text()
+            except DatabaseError as e:
+                raise ActionError(str(e))
+            log.event("tool", step=step, name=name, args=_safe_args(name, args), ok=True, url=br.page.url)
+            return br.redact(out), False, False
         else:
             raise ActionError(f"Unknown tool {name}.")
         br.screenshot(shot)

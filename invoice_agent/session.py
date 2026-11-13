@@ -17,7 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .agent import TOOLS, RunLog, RunResult, _execute, site_notes_for
+from .agent import DB_TOOLS, TOOLS, RunLog, RunResult, _db_hint, _execute, site_notes_for
+from .database import Database, DatabaseError
 from .browser import ActionError, Browser
 from .config import Portal
 from .llm import BrainBusy, BrainError, make_brain
@@ -106,7 +107,7 @@ class AgentSession(threading.Thread):
                  extra_domains: list[str] | None = None, client=None, provider: str | None = None,
                  model: str | None = None, runs_dir: Path, out_dir: Path,
                  executable_path: str | None = None, max_cost_usd: float = 2.0, max_steps: int = 80,
-                 effort: str = "medium", policy=None):
+                 effort: str = "medium", policy=None, db_url: str | None = None):
         super().__init__(daemon=True)
         self.id = secrets.token_urlsafe(10)
         if not url.startswith(("http://", "https://")):
@@ -118,6 +119,8 @@ class AgentSession(threading.Thread):
         self.portal = Portal(id="session", client="session", name=host, login_url=url, allowed_domains=allowed,
                              instructions=task or "Log in, then wait for my instructions.", max_steps=max_steps)
         self.creds = MemoryCredentials(username, password, totp_secret)
+        self.db_url = (db_url or "").strip()
+        self.database = None
         self.client = client
         self.provider = provider or ("anthropic" if client is not None else None)
         self.model = model
@@ -299,8 +302,18 @@ class AgentSession(threading.Thread):
             self.brain = make_brain(self.provider, self.model, self.client, self.effort, web_search=self.policy.web_search)
             for problem in self.policy.problems:
                 self._emit({"kind": "error", "text": f"Rules: {problem}"})
+            if self.db_url:
+                try:
+                    self.database = Database(self.db_url).connect()
+                    self._emit({"kind": "agent", "text": f"Connected to your database ({self.database.label()})."})
+                except DatabaseError as e:
+                    self._emit({"kind": "error", "text": f"Database: {e}"})
+            tools = TOOLS + DB_TOOLS if self.database else TOOLS
+            db_secrets = self.database.secret_values() if self.database else []
             with Browser(self.portal.allowed_domains, dl_dir, executable_path=self.executable_path,
-                         approve=self._approve, secret_values=self.creds.all_secret_values(), policy=self.policy) as br:
+                         approve=self._approve, secret_values=self.creds.all_secret_values() + db_secrets,
+                         policy=self.policy) as br:
+                br.database = self.database
                 self._set_status("opening site")
                 try:
                     br.navigate(self.portal.login_url)
@@ -309,7 +322,7 @@ class AgentSession(threading.Thread):
                     return
                 self._snap_frame(br)
                 br.on_tick = lambda: self._pump(br)
-                self.brain.start(SYSTEM_SESSION + "\n\n" + self.policy.system_text(), TOOLS, [
+                self.brain.start(SYSTEM_SESSION + "\n\n" + self.policy.system_text() + _db_hint(self.database), tools, [
                     *site_notes_for(br),
                     f"Site: {self.portal.name}\nAllowed sites: {', '.join(self.portal.allowed_domains)}\n"
                     f"Login details available: {', '.join(self.creds.fields('')) or 'none'}\n"
@@ -393,6 +406,8 @@ class AgentSession(threading.Thread):
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
             self.creds.wipe()
+            if self.database:
+                self.database.close()
             log.close()
             self._set_status("ended", downloads=len(self.downloads))
 
