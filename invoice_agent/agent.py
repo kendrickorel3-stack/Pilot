@@ -30,6 +30,8 @@ How you work:
 - Log in with fill_credential. You never see the username, password or one-time code; the system types them into the field you choose. If a one-time code is needed and fill_credential with field "totp" fails, use ask_human to get the code.
 - Download each invoice or statement that matches the task with the download tool, labelled with the invoice number and date as shown on the page. Check pagination or date filters so you don't miss documents in the requested period.
 - When the task is complete, or cannot be completed, call finish with a short factual summary listing what you downloaded and anything you could not get.
+- You can fill in whole forms, not just logins: type into each field (type_text, or click_at then type_keys on drawn pages), choose dropdown options, and tick boxes, then review before the final submit — which, like any submit, waits for the person's approval when the rules call for it.
+- Use web_search when you need outside information (a fact, a company, a rule, how a site works); it does not leave the page you are on. Use remember to save a durable note for your future sessions; your saved notes appear above.
 Seeing the screen:
 - The element list covers normal web pages. Pages or parts drawn as pictures (games, maps, charts, canvas apps; the snapshot lists them as "Drawn areas") are invisible to it, and some icons only show as "(clickable)" entries. For those, take a screenshot and act by position with click_at, drag, scroll, press_key and type_keys. Coordinates are screen pixels, 0,0 at the top-left of the 1280x900 view.
 - After every on-screen action you get a fresh screenshot. Check that it did what you expected before moving on.
@@ -82,6 +84,9 @@ TOOLS = [
           {"text": {"type": "string"}}, ["text"]),
     _tool("wait", "Wait 1-30 seconds, e.g. for a timer, an animation or a page to load. You get a fresh screenshot after.",
           {"seconds": {"type": "integer"}}, ["seconds"]),
+    _tool("remember", "Save a short, durable note for your future sessions: where something is on a site, a preference, "
+          "a stable reference. You will be shown your saved notes at the start of later tasks. Do not save secrets, codes "
+          "or anything that changes often.", {"note": {"type": "string"}}, ["note"]),
     _tool("ask_human", "Ask the bookkeeper one specific question, e.g. for a one-time code sent by SMS.",
           {"question": {"type": "string"}}, ["question"]),
     _tool("finish", "End the task.", {"status": {"type": "string", "enum": ["success", "partial", "failed"]},
@@ -128,7 +133,7 @@ def run_portal(portal: Portal, vault: Vault, *, out_dir: Path, runs_dir: Path,
     max_cost_usd = policy.max_cost_usd if max_cost_usd is None else max_cost_usd
     if client is not None and provider is None:
         provider = "anthropic"
-    brain = make_brain(provider, model, client, effort)
+    brain = make_brain(provider, model, client, effort, web_search=policy.web_search)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = runs_dir / f"{stamp}-{portal.id}"
     log = RunLog(run_dir)
@@ -284,6 +289,10 @@ def _execute_one(call, br: Browser, vault: Vault, portal: Portal, ask_human, log
             shot.with_suffix(".jpg").write_bytes(data)
             log.event("tool", step=step, name=name, args=_safe_args(name, args), ok=True, url=br.page.url, shot=shot.with_suffix(".jpg").name)
             return [{"type": "text", "text": br.snapshot()}, _img(data)], False, False
+        elif name == "remember":
+            saved = br.policy.append_memory(args["note"])
+            log.event("tool", step=step, name=name, args=_safe_args(name, args), ok=saved, url=br.page.url)
+            return ("Saved to memory." if saved else "There is nowhere to store memory in this run; continue without it."), False, False
         elif name == "ask_human":
             if not ask_human:
                 raise ActionError("No one is available to answer in unattended mode. Finish with status 'failed' and explain what is needed.")

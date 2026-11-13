@@ -28,6 +28,8 @@ RISKY = re.compile(
 
 VIEWPORT = {"width": 1280, "height": 900}
 
+
+
 SNAPSHOT_JS = r"""
 (maxEls) => {
   const sel = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=menuitem], [onclick], summary';

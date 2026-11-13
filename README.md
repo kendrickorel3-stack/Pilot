@@ -23,6 +23,10 @@ Stop it with Ctrl+C in the terminal window. Your key and model choice are saved 
 - **Take control:** click the live view (or "Take control") to drive the real browser yourself: click, scroll, type, keys, Back. "Hand back to agent" lets it carry on from where you left the page.
 - **Purchases:** anything that pays, buys, orders, confirms, deletes or submits waits for your approval, including purchase pop-ups drawn on a canvas, as long as the agent's stated purpose or the clicked element says so. On canvas pages Pilot can't read the button itself, so check the live view.
 - **Cost:** shown live in the top bar; each session stops at $2.00 of AI usage.
+- **Web search:** the agent can search the web for information while it works, run on the AI provider's own servers (no scraping). Turn it off in Rules → Settings → `[web] search = false` to save cost. If a model or account can't use it, Pilot drops it and the task continues.
+- **Memory:** the agent can save short durable notes (where things are on a site, a preference) to `data/rules/memory.md`; they're shown to it at the start of later sessions. Edit or delete them in the file or on disk.
+- **Forms:** it fills whole forms, not just logins — fields, dropdowns and checkboxes — with the final submit held for your approval when the rules call for it.
+
 
 ## Rules (data/rules/)
 Click **Rules** in the top bar, or edit the files directly. The agent reads them before every task; changes apply to the next task.
@@ -31,6 +35,7 @@ Click **Rules** in the top bar, or edit the files directly. The agent reads them
 |---|---|
 | `instructions.md` | Plain sentences the agent reads first: how to work, what to avoid, what matters |
 | `settings.toml` | `ask_before` words that need your OK, `auto_approve_sites`, `never_allow` words, cost and step limits, `also_allow` / `blocked` sites |
+| `memory.md` | Durable notes the agent saved for itself; shown to it next session |
 | `sites/<domain>.md` | Notes for one website (where things are, what numbers and timers mean), given to the agent when it arrives there |
 
 If a file is missing or broken, Pilot uses safe defaults and tells you. A few protections are fixed in code: the AI never sees passwords or codes, logins are typed only on the session's own site, no getting past CAPTCHAs or bot checks, website text can't give orders, and every session has a cost cap.

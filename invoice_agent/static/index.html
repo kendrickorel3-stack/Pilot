@@ -350,6 +350,7 @@ code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
       case 'press_key': return `Pressed ${esc(a.key)}`;
       case 'type_keys': return 'Typed into the page';
       case 'wait': return `Waited ${a.seconds}s`;
+      case 'remember': return `Saved a note to memory`;
       default: return esc(e.name);
     }
   }

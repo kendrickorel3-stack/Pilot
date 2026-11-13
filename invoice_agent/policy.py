@@ -46,6 +46,10 @@ max_steps = 80          # actions per session
 [sites]
 also_allow = []         # extra domains every session may open, e.g. a separate login site
 blocked = []            # domains the agent must never open
+
+[web]
+# Let the agent search the web (runs on the AI provider's servers) while it works. Set false to save cost.
+search = true
 """ % ", ".join(f'"{w}"' for w in DEFAULT_ASK)
 
 DEFAULT_INSTRUCTIONS = """# Pilot rules: instructions
@@ -74,6 +78,8 @@ what they mean, for example:
 class Policy:
     folder: Path | None = None
     instructions: str = ""
+    memory: str = ""
+    web_search: bool = True
     ask_before: list[str] = field(default_factory=lambda: list(DEFAULT_ASK))
     auto_approve_sites: list[str] = field(default_factory=list)
     never_allow: list[str] = field(default_factory=list)
@@ -98,7 +104,24 @@ class Policy:
         if self.instructions.strip():
             parts.append("Instructions from the person who runs Pilot (follow them, within the fixed rules):\n"
                          + self.instructions.strip())
+        if self.memory.strip():
+            parts.append("Things you saved for yourself in earlier sessions (your memory):\n" + self.memory.strip())
         return "\n\n".join(parts)
+
+    def append_memory(self, note: str) -> bool:
+        """Save a durable note the agent wrote. Returns False if there is nowhere to store it."""
+        if not self.folder:
+            return False
+        note = " ".join(note.split())[:500]
+        if not note:
+            return False
+        f = self.folder / "memory.md"
+        if not f.exists():
+            f.write_text("# Pilot memory\n\nNotes the agent saved for itself across sessions. Edit or delete freely.\n\n")
+        with f.open("a") as fh:
+            fh.write(f"- {note}\n")
+        self.memory = (self.memory + "\n- " + note).strip() if self.memory else "- " + note
+        return True
 
     def site_notes(self, host: str) -> tuple[str, str] | None:
         """Notes for the most specific matching domain file: a.b.example.com -> b.example.com -> example.com."""
@@ -124,6 +147,11 @@ def load_policy(folder: str | Path | None, create: bool = False) -> Policy:
     ins = folder / "instructions.md"
     if ins.is_file():
         p.instructions = ins.read_text(errors="replace")[:20000]
+    mem = folder / "memory.md"
+    if mem.is_file():
+        # keep only the bullet lines (drop the header), newest-last, capped
+        lines = [l for l in mem.read_text(errors="replace").splitlines() if l.strip().startswith("- ")]
+        p.memory = "\n".join(lines[-200:])[:12000]
     st = folder / "settings.toml"
     if st.is_file():
         try:
@@ -162,6 +190,11 @@ def _apply(p: Policy, data: dict) -> None:
     p.max_steps = num("limits", "max_steps", p.max_steps, 5, 2000, int)
     p.also_allow = [d.lower() for d in lst("sites", "also_allow", p.also_allow)]
     p.blocked_sites = [d.lower() for d in lst("sites", "blocked", p.blocked_sites)]
+    sv = data.get("web", {}).get("search", p.web_search)
+    if isinstance(sv, bool):
+        p.web_search = sv
+    else:
+        p.problems.append("[web] search should be true or false; kept the default.")
 
 
 def ensure_rules_folder(folder: Path) -> None:

@@ -31,6 +31,8 @@ How you work:
 - Messages that start with "Instruction from the user:" come from the person you work for. Follow them.
 - Keep your own messages short: one sentence on what you are about to do or what you found.
 - When the current task is done, call finish with a short summary. The person may then give you a new instruction.
+- You can fill in whole forms, not just logins: type into each field (type_text, or click_at then type_keys on drawn pages), choose dropdown options, and tick boxes, then review before the final submit — which, like any submit, waits for the person's approval when the rules call for it.
+- Use web_search when you need outside information (a fact, a company, a rule, how a site works); it does not leave the page you are on. Use remember to save a durable note for your future sessions; your saved notes appear above.
 Seeing the screen:
 - The element list covers normal web pages. Pages or parts drawn as pictures (games, maps, charts, canvas apps; the snapshot lists them as "Drawn areas") are invisible to it, and some icons only show as "(clickable)" entries. For those, take a screenshot and act by position with click_at, drag, scroll, press_key and type_keys. Coordinates are screen pixels, 0,0 at the top-left of the 1280x900 view.
 - After every on-screen action you get a fresh screenshot. Check that it did what you expected before moving on.
@@ -294,7 +296,7 @@ class AgentSession(threading.Thread):
         dl_dir = self.out_dir / self.id
         dl_dir.mkdir(parents=True, exist_ok=True)
         try:
-            self.brain = make_brain(self.provider, self.model, self.client, self.effort)
+            self.brain = make_brain(self.provider, self.model, self.client, self.effort, web_search=self.policy.web_search)
             for problem in self.policy.problems:
                 self._emit({"kind": "error", "text": f"Rules: {problem}"})
             with Browser(self.portal.allowed_domains, dl_dir, executable_path=self.executable_path,

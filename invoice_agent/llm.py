@@ -68,16 +68,22 @@ class Brain:
 
 # ---------------------------------------------------------------- Anthropic (Claude)
 class AnthropicBrain(Brain):
-    def __init__(self, client=None, model: str = DEFAULT_MODEL["anthropic"], effort: str = "medium"):
+    def __init__(self, client=None, model: str = DEFAULT_MODEL["anthropic"], effort: str = "medium", web_search: bool = True):
         super().__init__(model=model)
         import anthropic
         self._sdk = anthropic
         self.client = client or anthropic.Anthropic()
         self.effort = effort
+        self._search_on = web_search
         self.messages: list[dict] = []
 
+    def _tools(self):
+        if self._search_on:
+            return [*self.fn_tools, {"type": "web_search_20260209", "name": "web_search"}]
+        return self.fn_tools
+
     def start(self, system, tools, user_texts):
-        self.system, self.tools = system, tools
+        self.system, self.fn_tools = system, tools
         self.messages = [{"role": "user", "content": [{"type": "text", "text": t} for t in user_texts]}]
 
     def add_results(self, results, extra_texts=None):
@@ -94,17 +100,25 @@ class AnthropicBrain(Brain):
 
     def next(self) -> Turn:
         a = self._sdk
-        try:
-            resp = self.client.beta.messages.create(
-                model=self.model, max_tokens=16000, system=self.system, tools=self.tools, messages=self.messages,
-                output_config={"effort": self.effort}, cache_control={"type": "ephemeral"},
-                betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-        except a.RateLimitError as e:
-            raise BrainBusy("The AI service is busy.") from e
-        except a.APIStatusError as e:
-            raise BrainError(f"AI service error {e.status_code}: {e.message}") from e
-        except a.APIConnectionError as e:
-            raise BrainError("Could not reach the AI service.") from e
+        for _attempt in range(8):  # continue through any pause_turn while a server tool (web search) runs
+            try:
+                resp = self.client.beta.messages.create(
+                    model=self.model, max_tokens=16000, system=self.system, tools=self._tools(), messages=self.messages,
+                    output_config={"effort": self.effort}, cache_control={"type": "ephemeral"},
+                    betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+            except a.RateLimitError as e:
+                raise BrainBusy("The AI service is busy.") from e
+            except a.APIStatusError as e:
+                if self._search_on and "web_search" in str(getattr(e, "message", e)).lower():
+                    self._search_on = False  # this model/account can't use web search; drop it and go on
+                    continue
+                raise BrainError(f"AI service error {e.status_code}: {e.message}") from e
+            except a.APIConnectionError as e:
+                raise BrainError("Could not reach the AI service.") from e
+            if resp.stop_reason == "pause_turn":
+                self.messages.append({"role": "assistant", "content": resp.content})
+                continue
+            break
         u = resp.usage
         if u:
             self.tokens["input"] += (u.input_tokens or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0)
@@ -125,19 +139,25 @@ class OpenAIBrain(Brain):
     Nothing is stored at OpenAI (store=False): each request carries the conversation, including the
     model's encrypted reasoning items, which keeps reasoning intact across tool calls."""
 
-    def __init__(self, client=None, model: str = DEFAULT_MODEL["openai"], effort: str = "medium"):
+    def __init__(self, client=None, model: str = DEFAULT_MODEL["openai"], effort: str = "medium", web_search: bool = True):
         super().__init__(model=model)
         import openai
         self._sdk = openai
         self.client = client or openai.OpenAI()
         self.effort = effort
         self._send_effort = True
+        self._search_on = web_search
         self.items: list[dict] = []
+
+    def _tools(self):
+        if self._search_on:
+            return [*self.fn_tools, {"type": "web_search"}]
+        return self.fn_tools
 
     def start(self, system, tools, user_texts):
         self.instructions = system
-        self.tools = [{"type": "function", "name": t["name"], "description": t["description"],
-                       "parameters": t["input_schema"], "strict": True} for t in tools]
+        self.fn_tools = [{"type": "function", "name": t["name"], "description": t["description"],
+                          "parameters": t["input_schema"], "strict": True} for t in tools]
         self.items = [_user([{"type": "input_text", "text": t} for t in user_texts])]
 
     def add_results(self, results, extra_texts=None):
@@ -165,7 +185,7 @@ class OpenAIBrain(Brain):
 
     def next(self) -> Turn:
         o = self._sdk
-        kw = dict(model=self.model, instructions=self.instructions, input=self.items, tools=self.tools,
+        kw = dict(model=self.model, instructions=self.instructions, input=self.items, tools=self._tools(),
                   tool_choice="auto", parallel_tool_calls=True, store=False,
                   include=["reasoning.encrypted_content"], prompt_cache_key="pilot-agent")
         if self._send_effort:
@@ -173,7 +193,11 @@ class OpenAIBrain(Brain):
         try:
             resp = self.client.responses.create(**kw)
         except o.BadRequestError as e:
-            if self._send_effort and "reasoning" in str(e).lower():
+            msg = str(e).lower()
+            if self._search_on and ("web_search" in msg or "web search" in msg):
+                self._search_on = False  # this model/account can't use web search; drop it and go on
+                return self.next()
+            if self._send_effort and "reasoning" in msg:
                 self._send_effort = False  # model without reasoning settings: retry plainly
                 return self.next()
             raise BrainError(f"AI service error {e.status_code}: {e.message}") from e
@@ -243,11 +267,12 @@ def _key_for(provider: str) -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
-def make_brain(provider: str | None = None, model: str | None = None, client=None, effort: str = "medium") -> Brain:
+def make_brain(provider: str | None = None, model: str | None = None, client=None, effort: str = "medium",
+               web_search: bool = True) -> Brain:
     provider = provider or active_provider()
     if provider is None:
         raise BrainError("No AI key is set. Add an OpenAI or Anthropic API key.")
     model = model or active_model(provider)
     if provider == "openai":
-        return OpenAIBrain(client, model, effort)
-    return AnthropicBrain(client, model, effort)
+        return OpenAIBrain(client, model, effort, web_search)
+    return AnthropicBrain(client, model, effort, web_search)
