@@ -42,7 +42,24 @@ export interface ScanReport {
 
 const UA = "StemBorer/1.0 (+security-self-test; authorized-scope)";
 const FETCH_TIMEOUT_MS = 12000;
-const SAMPLE_BYTES = 262144; // 256 KB proof sample cap
+const SAMPLE_BYTES = 262144; // 256 KB probe sample for reachability detection
+const MAX_PROOF_BYTES = 50 * 1024 * 1024; // 50 MB cap on full-evidence capture
+
+/**
+ * Public-by-design assets. These are MEANT to be reachable without a session —
+ * flagging them as "leaked gated media" is a false positive. Matched on the URL
+ * path so branding/chrome never shows up as a finding.
+ */
+const PUBLIC_ASSET =
+  /(favicon|apple-touch-icon|android-chrome|mstile|safari-pinned-tab|\/icons?\/|[-_/](logo|brand|sprite|placeholder|avatar|og[-_]?image|twitter[-_]?(image|card))[-_.]?)/i;
+
+function isPublicAsset(url: string): boolean {
+  try {
+    return PUBLIC_ASSET.test(new URL(url).pathname);
+  } catch {
+    return PUBLIC_ASSET.test(url);
+  }
+}
 
 function timeoutSignal(ms: number) {
   const c = new AbortController();
@@ -164,7 +181,14 @@ export async function runScan(target: string, registrable: string): Promise<Scan
   const media = extractMedia(target, html);
 
   // 2. Probe each discovered media URL without auth.
+  let publicSkipped = 0;
   for (const mu of media) {
+    // Skip site chrome / branding — public by design, not a paywall leak.
+    if (isPublicAsset(mu)) {
+      publicSkipped++;
+      continue;
+    }
+
     const r = await probe(mu);
     if (!isReachable(r.status)) continue;
 
@@ -250,13 +274,17 @@ export async function runScan(target: string, registrable: string): Promise<Scan
     });
   }
 
-  if (media.length === 0) {
+  const realMedia = media.length - publicSkipped;
+  if (realMedia <= 0) {
     findings.push({
       id: nextId(),
-      title: "No static media URLs found in page HTML",
+      title: "No gated media URLs found in page HTML",
       severity: "info",
       category: "discovery",
-      summary: "No media was discoverable from the server-rendered HTML. The player may inject URLs via JavaScript/API — point Stem Borer at the API/manifest URL directly to test those.",
+      summary:
+        publicSkipped > 0
+          ? `Only public assets (favicons/branding) were found in the HTML — nothing that looks like gated media. The player may inject URLs via JavaScript/API — point Stem Borer at the API/manifest URL directly to test those.`
+          : "No media was discoverable from the server-rendered HTML. The player may inject URLs via JavaScript/API — point Stem Borer at the API/manifest URL directly to test those.",
       evidence: { url: target, method: "GET page", status: pageRes?.status },
       fix: "If media loads via an API call, run a scan against that API/manifest endpoint so Stem Borer can test it directly.",
     });
@@ -272,10 +300,10 @@ export async function runScan(target: string, registrable: string): Promise<Scan
     registrable,
     startedAt,
     finishedAt: new Date().toISOString(),
-    mediaDiscovered: media.length,
+    mediaDiscovered: Math.max(0, media.length - publicSkipped),
     findings,
     score,
   };
 }
 
-export { SAMPLE_BYTES, UA };
+export { SAMPLE_BYTES, MAX_PROOF_BYTES, UA };
