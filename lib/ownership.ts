@@ -62,6 +62,15 @@ export interface OwnershipResult {
   reason?: string;
 }
 
+/**
+ * In-memory cache of successful verifications. Once a domain proves ownership,
+ * we trust it for CACHE_TTL_MS so repeat scans don't re-hit DNS every time.
+ * A failed/absent record is never cached, and the cache is process-local, so
+ * removing the TXT record revokes access within the TTL at worst.
+ */
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const verifiedCache = new Map<string, number>(); // registrableDomain -> expiry epoch ms
+
 /** Live DNS TXT check. True only if the expected HMAC token is published on the zone. */
 export async function verifyOwnership(domain: string): Promise<OwnershipResult> {
   const reg = registrableDomain(domain);
@@ -74,6 +83,11 @@ export async function verifyOwnership(domain: string): Promise<OwnershipResult> 
     foundRecords: [],
   };
 
+  const cachedUntil = verifiedCache.get(reg);
+  if (cachedUntil && cachedUntil > Date.now()) {
+    return { ...base, verified: true };
+  }
+
   let records: string[][] = [];
   try {
     records = await dns.resolveTxt(reg);
@@ -83,6 +97,7 @@ export async function verifyOwnership(domain: string): Promise<OwnershipResult> 
 
   const flat = records.map((chunks) => chunks.join("").trim());
   const verified = flat.some((r) => r === expected);
+  if (verified) verifiedCache.set(reg, Date.now() + CACHE_TTL_MS);
   return {
     ...base,
     verified,
