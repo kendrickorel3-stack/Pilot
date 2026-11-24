@@ -3,9 +3,14 @@
  *
  * Every test here runs ONLY after lib/scope.assertInScopeOrThrow has passed,
  * so all requests go to a domain in the operator's declared scope. The goal is to find
+ *
+ * Discovery is static-HTML + headless (lib/discover). The leak verdict is always a
+ * clean, credential-free fetch — the headless browser only surfaces candidate URLs.
  * paywalled video/image content that is reachable WITHOUT a paid session, and
  * to tell the operator exactly how to fix each hole.
  */
+
+import { discoverMedia } from "./discover";
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
@@ -53,12 +58,18 @@ const MAX_PROOF_BYTES = 50 * 1024 * 1024; // 50 MB cap on full-evidence capture
 const PUBLIC_ASSET =
   /(favicon|apple-touch-icon|android-chrome|mstile|safari-pinned-tab|\/icons?\/|[-_/](logo|brand|sprite|placeholder|avatar|og[-_]?image|twitter[-_]?(image|card))[-_.]?)/i;
 
+// Blurred / low-res teasers are public by design (the whole point is to show a
+// locked-looking preview). Reaching one is not a paywall leak, so exclude them.
+const PREVIEW_ASSET = /(blur\d*|thumb(nail)?|teaser|\/sm\/|[-_.]sm[-_.]|lowres|poster)/i;
+
 function isPublicAsset(url: string): boolean {
+  let path = url;
   try {
-    return PUBLIC_ASSET.test(new URL(url).pathname);
+    path = new URL(url).pathname + new URL(url).search;
   } catch {
-    return PUBLIC_ASSET.test(url);
+    /* use raw url */
   }
+  return PUBLIC_ASSET.test(path) || PREVIEW_ASSET.test(path);
 }
 
 function timeoutSignal(ms: number) {
@@ -178,9 +189,15 @@ export async function runScan(target: string, registrable: string): Promise<Scan
   const html = pageRes && isReachable(pageRes.status) ? await pageRes.text().catch(() => "") : "";
   const pageLocked = PAYWALL_MARKERS.test(html);
 
-  const media = extractMedia(target, html);
+  // Static HTML media + media the page only loads via JavaScript/API. The
+  // headless pass renders the page and records the URLs the player requests;
+  // it is DISCOVERY ONLY. The leak verdict below always comes from a clean,
+  // credential-free fetch (no cookies, signing token stripped) — the browser's
+  // authorized session is never used to judge or capture a leak.
+  const discovered = await discoverMedia(target).catch(() => [] as string[]);
+  const media = Array.from(new Set([...extractMedia(target, html), ...discovered]));
 
-  // 2. Probe each discovered media URL without auth.
+  // 2. Test each candidate credential-free.
   let publicSkipped = 0;
   for (const mu of media) {
     // Skip site chrome / branding — public by design, not a paywall leak.
@@ -189,79 +206,82 @@ export async function runScan(target: string, registrable: string): Promise<Scan
       continue;
     }
 
-    const r = await probe(mu);
-    if (!isReachable(r.status)) continue;
-
-    const isImage = /image\//i.test(r.contentType || "") || /\.(jpe?g|png|gif|webp|avif)(\?|#|$)/i.test(mu);
     const isManifest = /\.(m3u8|mpd)(\?|#|$)/i.test(mu);
-    const severity: Severity = isManifest ? "critical" : isImage ? "medium" : "high";
 
-    findings.push({
-      id: nextId(),
-      title: isManifest
-        ? "Streaming manifest reachable without authentication"
-        : isImage
-        ? "Gated image reachable without authentication"
-        : "Gated video reachable without authentication",
-      severity,
-      category: isManifest ? "manifest" : "direct-media",
-      summary: `The media at this URL returned ${r.status} to an unauthenticated request. If it is paid content, anyone with the URL can access it.`,
-      evidence: { url: mu, method: "GET (range 0-256KB, no session cookie)", status: r.status, contentType: r.contentType, bytes: r.bytes },
-      proofUrl: proofLink(registrable, mu),
-      fix: isManifest
-        ? "Serve HLS/DASH manifests and segments through an authenticated endpoint or short-lived signed URLs tied to the user's entitlement. Do not expose the manifest on a public/static path."
-        : "Put this file behind a server-side access check (verify the session + active entitlement before returning bytes), or front it with per-user short-lived signed URLs. Remove any public/static route to the raw file.",
-    });
+    // Credential-free test: strip any signing/token params and send no cookies.
+    // A URL that only works WITH its token is the gate doing its job — not a
+    // leak — so the verdict is judged on the stripped form, not the signed one.
+    const credFree = stripSigningParams(mu) || mu;
+    const hadSigning = credFree !== mu;
 
-    // 3. Signed-URL tampering: does stripping the token still work?
-    const stripped = stripSigningParams(mu);
-    if (stripped) {
-      const r2 = await probe(stripped);
-      if (isReachable(r2.status)) {
-        findings.push({
-          id: nextId(),
-          title: "Access token is decorative — content loads without it",
-          severity: "critical",
-          category: "signed-url",
-          summary: "Removing the signing/expiry parameters still returned the content. The signature is not being enforced server-side.",
-          evidence: { url: stripped, method: "GET without signing params", status: r2.status, contentType: r2.contentType, bytes: r2.bytes, note: `original: ${mu}` },
-          proofUrl: proofLink(registrable, stripped),
-          fix: "Enforce the signature on the server: reject requests whose token is missing, altered, or expired. A CDN that passes unsigned requests through to origin is the usual culprit — require signed URLs at the edge.",
-        });
-      }
+    const r = await probe(credFree);
+    if (!isReachable(r.status)) continue; // gated once credentials are removed — correct, no finding
+
+    const isImage = /image\//i.test(r.contentType || "") || /\.(jpe?g|png|gif|webp|avif)(\?|#|$)/i.test(credFree);
+
+    if (hadSigning) {
+      // Signature removed and the content still came back.
+      findings.push({
+        id: nextId(),
+        title: "Access token is decorative — content loads without it",
+        severity: "critical",
+        category: "signed-url",
+        summary: "The URL carries a signing/expiry token, but removing it still returned the content. The signature is not enforced server-side — anyone can drop the token and fetch the file.",
+        evidence: { url: credFree, method: "GET without signing params, no session", status: r.status, contentType: r.contentType, bytes: r.bytes, note: `signed original: ${mu}` },
+        proofUrl: proofLink(registrable, credFree),
+        fix: "Enforce the signature on the server/edge: reject requests whose token is missing, altered, or expired. A CDN that passes unsigned requests through to origin is the usual culprit — require signed URLs at the edge.",
+      });
+    } else {
+      findings.push({
+        id: nextId(),
+        title: isManifest
+          ? "Streaming manifest reachable without authentication"
+          : isImage
+          ? "Gated image reachable without authentication"
+          : "Gated video reachable without authentication",
+        severity: isManifest ? "critical" : isImage ? "medium" : "high",
+        category: isManifest ? "manifest" : "direct-media",
+        summary: `The media at this URL returned ${r.status} to a request with no session and no token. If it is paid content, anyone with the URL can access it.`,
+        evidence: { url: credFree, method: "GET, no session cookie, no token", status: r.status, contentType: r.contentType, bytes: r.bytes },
+        proofUrl: proofLink(registrable, credFree),
+        fix: isManifest
+          ? "Serve HLS/DASH manifests and segments through an authenticated endpoint or short-lived signed URLs tied to the user's entitlement. Do not expose the manifest on a public/static path."
+          : "Put this file behind a server-side access check (verify the session + active entitlement before returning bytes), or front it with per-user short-lived signed URLs. Remove any public/static route to the raw file.",
+      });
     }
 
-    // 4. Manifest expansion: test the first segment too.
-    if (isManifest && /\.m3u8(\?|#|$)/i.test(mu)) {
-      const manRes = await safeFetch(mu);
+    // Manifest expansion: test the first segment too, credential-free.
+    if (isManifest && /\.m3u8(\?|#|$)/i.test(credFree)) {
+      const manRes = await safeFetch(credFree);
       const manText = manRes && isReachable(manRes.status) ? await manRes.text().catch(() => "") : "";
       const seg = manText
         .split(/\r?\n/)
         .map((l) => l.trim())
         .find((l) => l && !l.startsWith("#"));
-      if (seg) {
-        const segUrl = absolutize(mu, seg);
-        if (segUrl) {
-          const rs = await probe(segUrl);
-          if (isReachable(rs.status)) {
-            findings.push({
-              id: nextId(),
-              title: "Video segments downloadable without authentication",
-              severity: "critical",
-              category: "manifest",
-              summary: "A media segment referenced by the manifest was fetched unauthenticated. The full stream can be reconstructed.",
-              evidence: { url: segUrl, method: "GET segment, no session", status: rs.status, contentType: rs.contentType, bytes: rs.bytes },
-              proofUrl: proofLink(registrable, segUrl),
-              fix: "Authenticate every segment request, not just the manifest. Use signed segment URLs or an authorizing proxy; never serve .ts/.m4s segments from a public bucket.",
-            });
-          }
+      const segUrl = seg ? absolutize(credFree, seg) : null;
+      const segCredFree = segUrl ? stripSigningParams(segUrl) || segUrl : null;
+      if (segCredFree) {
+        const rs = await probe(segCredFree);
+        if (isReachable(rs.status)) {
+          findings.push({
+            id: nextId(),
+            title: "Video segments downloadable without authentication",
+            severity: "critical",
+            category: "manifest",
+            summary: "A media segment referenced by the manifest was fetched with no session and no token. The full stream can be reconstructed.",
+            evidence: { url: segCredFree, method: "GET segment, no session, no token", status: rs.status, contentType: rs.contentType, bytes: rs.bytes },
+            proofUrl: proofLink(registrable, segCredFree),
+            fix: "Authenticate every segment request, not just the manifest. Use signed segment URLs or an authorizing proxy; never serve .ts/.m4s segments from a public bucket.",
+          });
         }
       }
     }
   }
 
   // 5. Cosmetic gate: page says 'locked' but media was reachable anyway.
-  const anyReachable = findings.some((f) => f.category === "direct-media" || f.category === "manifest");
+  const anyReachable = findings.some(
+    (f) => f.category === "direct-media" || f.category === "manifest" || f.category === "signed-url"
+  );
   if (pageLocked && anyReachable) {
     findings.push({
       id: nextId(),
