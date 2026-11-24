@@ -56,19 +56,29 @@ const MAX_PROOF_BYTES = 50 * 1024 * 1024; // 50 MB cap on full-evidence capture
  * path so branding/chrome never shows up as a finding.
  */
 const PUBLIC_ASSET =
-  /(favicon|apple-touch-icon|android-chrome|mstile|safari-pinned-tab|\/icons?\/|[-_/](logo|brand|sprite|placeholder|avatar|og[-_]?image|twitter[-_]?(image|card))[-_.]?)/i;
+  /[-_/](favicon|apple-touch-icon|android-chrome|mstile|safari-pinned-tab|icons?|logo|brand|sprite|placeholder|avatar|badge|banner|flags?|bg|background|og[-_]?image|twitter[-_]?(image|card))[-_./]/i;
 
 // Blurred / low-res teasers are public by design (the whole point is to show a
 // locked-looking preview). Reaching one is not a paywall leak, so exclude them.
 const PREVIEW_ASSET = /(blur\d*|thumb(nail)?|teaser|\/sm\/|[-_.]sm[-_.]|lowres|poster)/i;
 
+// Third-party library / SDK / analytics / payment hosts. These serve vendor
+// assets, never the operator's gated content, so a reachable file here is noise.
+const VENDOR_HOST =
+  /(^|\.)(jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com|googleapis\.com|gstatic\.com|googletagmanager\.com|google-analytics\.com|google\.com|facebook\.(com|net)|fbcdn\.net|stripe\.com|shift4\.com|paypal\.com|cloudflareinsights\.com|sentry\.io|intercom\.io|hotjar\.com|segment\.(io|com)|gravatar\.com|recaptcha\.net)$/i;
+
 function isPublicAsset(url: string): boolean {
+  let host = "";
   let path = url;
   try {
-    path = new URL(url).pathname + new URL(url).search;
+    const u = new URL(url);
+    host = u.hostname;
+    path = u.pathname + u.search;
   } catch {
     /* use raw url */
   }
+  if (host && VENDOR_HOST.test(host)) return true; // vendor/SDK/analytics domain
+  if (/\.svg(\?|#|$)/i.test(path)) return true; // vector UI: icons, flags, logos — not paid media
   return PUBLIC_ASSET.test(path) || PREVIEW_ASSET.test(path);
 }
 
