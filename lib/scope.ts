@@ -31,13 +31,28 @@ export function registrableDomain(hostname: string): string {
   return parts.slice(-2).join(".");
 }
 
+/** Pull a bare hostname out of a scope entry that may be a full URL, a host, or host+path. */
+function entryToHost(entry: string): string {
+  let s = entry.trim().toLowerCase();
+  if (!s) return "";
+  if (/^https?:\/\//.test(s)) {
+    try {
+      return new URL(s).hostname;
+    } catch {
+      /* fall through */
+    }
+  }
+  // Strip any scheme-less path/port, keep the host label.
+  return s.replace(/^\/\//, "").split("/")[0].split(":")[0];
+}
+
 /** The operator's declared, authorized scope — registrable domains, parsed once from the env. */
 export function allowedScope(): string[] {
   return (process.env.STEM_BORER_SCOPE || "")
     .split(/[,\s]+/)
-    .map((d) => d.trim().toLowerCase())
+    .map(entryToHost)
     .filter(Boolean)
-    .map((d) => registrableDomain(d));
+    .map((h) => registrableDomain(h));
 }
 
 export function isInScope(hostname: string): boolean {
